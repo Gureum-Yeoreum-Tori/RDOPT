@@ -1,0 +1,14 @@
+{
+  "recommendations": [
+    "ms-toolsai.jupyter-slideshow",
+    "donjayamanne.python-extension-pack",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy",
+    "ms-toolsai.jupyter-notebook-renderers",
+    "ms-toolsai.jupyter-keymap",
+    "ms-toolsai.jupyter",
+    "h5web.h5web",
+    "ms-vscode.data-wrangler",
+    "percy.vscode-numpy-viewer"
+  ]
+}
