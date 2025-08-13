@@ -132,7 +132,7 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
 epochs = 500 # 에포크 수를 줄여서 과적합을 방지하고 검증 손실을 모니터링합니다.
 best_val_loss = float('inf')
-model_save_path = 'fnn_seal_best_model.pth'
+model_save_path = 'net/fnn_seal_best_model.pth'
 
 #%%
 # 4. Training loop
@@ -172,7 +172,7 @@ for epoch in range(epochs):
 
 #%%
 # 5. Evaluate the best model on the test set and visualize
-model.load_state_dict(torch.load(model_save_path)) # Load the best model
+model.load_state_dict(torch.load(model_save_path, weights_only=False)) # Load the best model
 model.eval()  # Set the model to evaluation mode
 all_predictions = []
 all_actuals = []
@@ -199,7 +199,7 @@ predictions = predictions.reshape(n_test_samples, n_vel, 6)
 num_samples_to_plot = 5
 random_indices = np.random.choice(n_test_samples, num_samples_to_plot, replace=False)
 
-rdc_labels = ['Kxx', 'Kxy', 'Kyx', 'Kyy', 'Cxx', 'Cxy']
+rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
 
 for i in random_indices:
     fig, axes = plt.subplots(3, 2, figsize=(15, 18))

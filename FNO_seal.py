@@ -51,15 +51,23 @@ with h5py.File(mat_file, 'r') as mat:
 # 데이터 스케일링
 # 입력 파라미터 스케일링
 scaler_X = StandardScaler()
-X_scaled = scaler_X.fit_transform(X_params)
+X_scaled = scaler_X.fit_transform(X_params) 
 
 # 출력 함수 스케일링
-# 각 RDC 계수별로 통계량을 계산하기 위해 데이터를 재배열 (nData * nVel, nRDC)
-y_reshaped = y_functions.transpose(0, 2, 1).reshape(-1, n_rdc_coeffs)
-scaler_y = StandardScaler()
-y_scaled_reshaped = scaler_y.fit_transform(y_reshaped)
-# 다시 FNO 입력 형태에 맞게 복원 [nData, nRDC, nVel]
-y_scaled = y_scaled_reshaped.reshape(n_data, n_vel, n_rdc_coeffs).transpose(0, 2, 1)
+ # 각 RDC 계수를 개별적으로 스케일링하여 각 계수의 통계적 특성을 독립적으로 처리합니다.
+ # 이는 각 계수를 예측하는 별도의 모델을 학습시킬 때 더 적합합니다.
+scalers_y = [StandardScaler() for _ in range(n_rdc_coeffs)]
+y_scaled_channels = []
+# y_functions shape: [n_data, n_rdc_coeffs, n_vel]
+for i in range(n_rdc_coeffs):
+    # 각 채널(RDC)의 데이터를 [n_data * n_vel, 1] 형태로 만들어 스케일러에 적용
+    channel_data = y_functions[:, i, :].reshape(-1, 1)
+    scaled_channel_data = scalers_y[i].fit_transform(channel_data)
+    # 원래 형태 [n_data, n_vel]로 복원
+    y_scaled_channels.append(scaled_channel_data.reshape(n_data, n_vel))
+
+# 스케일링된 채널들을 다시 하나로 합칩니다. [n_data, n_rdc_coeffs, n_vel]
+y_scaled = np.stack(y_scaled_channels, axis=1)
 
 # GPU 설정
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -137,9 +145,9 @@ class ParametricFNO(nn.Module):
 
 model = ParametricFNO(
     n_params=n_para,
-    param_embedding_dim=32,
-    fno_modes=16, # 푸리에 모드 개수 (주파수 공간에서 얼마나 많은 모드를 사용할지)
-    fno_hidden_channels=64,
+    param_embedding_dim=64,
+    fno_modes=4, # 푸리에 모드 개수 (주파수 공간에서 얼마나 많은 모드를 사용할지)
+    fno_hidden_channels=128,
     in_channels=1, # 입력은 grid 좌표(1차원)
     out_channels=n_rdc_coeffs # 출력은 RDC 계수(6개)
 ).to(device)
@@ -147,10 +155,11 @@ model = ParametricFNO(
 #%%
 # 3. Training setup
 criterion = nop.losses.LpLoss(d=1, p=2) # FNO 학습에는 L2 Loss가 효과적
-optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
-epochs = 300
+optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+epochs = 1000
 best_val_loss = float('inf')
-model_save_path = 'fno_seal_best_model.pth'
+model_save_path = 'net/fno_seal_best_model.pth'
+os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
 
 #%%
 # 4. Training loop
@@ -183,7 +192,7 @@ for epoch in range(epochs):
     train_loss /= len(train_loader.dataset)
     val_loss /= len(val_loader.dataset)
     
-    if (epoch+1) % 10 == 0:
+    if (epoch+1) % 100 == 0:
         print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}')
 
     if val_loss < best_val_loss:
@@ -192,68 +201,46 @@ for epoch in range(epochs):
 
 #%%
 # 5. Evaluate the best model on the test set and visualize
-model.load_state_dict(torch.load(model_save_path))
+# strict=False 옵션을 추가하여 모델 state_dict에 포함된 추가 메타데이터 키를 무시하도록 합니다.
+# 이는 neuralop과 같은 특정 라이브러리를 사용할 때 발생할 수 있는 호환성 문제를 해결합니다.
+model.load_state_dict(torch.load(model_save_path, weights_only=False), strict=False)
 model.eval()
 
 test_indices = test_dataset.indices
-test_params = X_tensor[test_indices].to(device)
-test_functions = y_tensor[test_indices] # 스케일링된 실제값 (CPU에 둠)
+n_test_samples = len(test_indices)
 
-test_grid = grid_tensor.unsqueeze(0).repeat(test_params.size(0), 1, 1).to(device)
+test_params = X_tensor[test_indices].to(device)
+# Get scaled actuals from y_tensor. No need to move to device, will be used on CPU.
+actuals_scaled = y_tensor[test_indices].numpy()
+grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
 
 with torch.no_grad():
-    predictions_scaled = model(test_params, test_grid).cpu() # [n_test, nRDC, nVel]
+    predictions_scaled = model(test_params, grid_repeated).cpu().numpy()
 
-# 스케일러를 이용해 원래 값으로 복원
-# (n_test, nRDC, nVel) -> (n_test, nVel, nRDC) -> (n_test * nVel, nRDC)
-actuals_reshaped = test_functions.permute(0, 2, 1).reshape(-1, n_rdc_coeffs)
-predictions_reshaped = predictions_scaled.permute(0, 2, 1).reshape(-1, n_rdc_coeffs)
+# Inverse transform to original scale
+# Reshape for scaler: [n_samples, n_channels, n_points] -> [n_samples*n_points, n_channels]
+# Note: n_rdc_coeffs is the number of channels
+pred_reshaped = predictions_scaled.transpose(0, 2, 1).reshape(-1, n_rdc_coeffs)
+act_reshaped = actuals_scaled.transpose(0, 2, 1).reshape(-1, n_rdc_coeffs)
 
-actuals_unscaled = scaler_y.inverse_transform(actuals_reshaped)
-predictions_unscaled = scaler_y.inverse_transform(predictions_reshaped)
+predictions_orig = scaler_y.inverse_transform(pred_reshaped)
+actuals_orig = scaler_y.inverse_transform(act_reshaped)
 
-# 플로팅을 위해 원래 형태로 복원 [n_test, nVel, nRDC]
-n_test_samples = len(test_indices)
-actuals = actuals_unscaled.reshape(n_test_samples, n_vel, n_rdc_coeffs)
-predictions = predictions_unscaled.reshape(n_test_samples, n_vel, n_rdc_coeffs)
-
-# Visualize results for a few random samples
-num_samples_to_plot = 5
-random_indices_in_test = np.random.choice(n_test_samples, num_samples_to_plot, replace=False)
-
-rdc_labels = ['Kxx', 'Kxy', 'Kyx', 'Kyy', 'Cxx', 'Cxy']
-
-for i in random_indices_in_test:
-    fig, axes = plt.subplots(3, 2, figsize=(15, 18))
-    axes = axes.ravel()
-    original_index = test_indices[i]
-    fig.suptitle(f'Test Sample #{original_index}: Actual vs. Predicted RDC vs. Speed (FNO)', fontsize=20)
-    
-    for j in range(n_rdc_coeffs):
-        ax = axes[j]
-        ax.plot(w_vec.flatten(), actuals[i, :, j], 'bo-', label='Actual')
-        ax.plot(w_vec.flatten(), predictions[i, :, j], 'ro--', label='Predicted')
-        ax.set_title(rdc_labels[j])
-        ax.set_xlabel('Rotational Speed (rad/s)')
-        ax.set_ylabel('RDC Value')
-        ax.legend()
-        ax.grid(True)
-        
-    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-    plt.show()
-predictions = predictions_unscaled.reshape(n_test_samples, n_vel, n_rdc_coeffs)
+# Reshape back for plotting: [n_samples, n_points, n_channels]
+predictions = predictions_orig.reshape(n_test_samples, n_vel, n_rdc_coeffs)
+actuals = actuals_orig.reshape(n_test_samples, n_vel, n_rdc_coeffs)
 
 # Visualize results for a few random samples
-num_samples_to_plot = 5
-random_indices_in_test = np.random.choice(n_test_samples, num_samples_to_plot, replace=False)
+num_samples_to_plot = 3
+random_indices = np.random.choice(n_test_samples, num_samples_to_plot, replace=False)
 
-rdc_labels = ['Kxx', 'Kxy', 'Kyx', 'Kyy', 'Cxx', 'Cxy']
+rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
 
-for i in random_indices_in_test:
+for i in random_indices:
     fig, axes = plt.subplots(3, 2, figsize=(15, 18))
     axes = axes.ravel()
-    original_index = test_indices[i]
-    fig.suptitle(f'Test Sample #{original_index}: Actual vs. Predicted RDC vs. Speed (FNO)', fontsize=20)
+    original_sample_idx = test_indices[i]
+    fig.suptitle(f'Test Sample #{original_sample_idx}: Actual vs. Predicted RDC vs. Speed', fontsize=20)
     
     for j in range(n_rdc_coeffs):
         ax = axes[j]
