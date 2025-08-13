@@ -1,6 +1,5 @@
 #%%
 import os
-import glob
 import torch
 import numpy as np
 import h5py
@@ -22,11 +21,13 @@ data_dir = 'dataset/data/tapered_seal'
 mat_file = os.path.join(data_dir, '20250812_T_113003', 'dataset.mat')
 
 # 파라미터 설정
-batch_size = 2**10
+batch_size = 2**16
 criterion = nop.losses.LpLoss(d=1, p=2)
-epochs = 2000
-fno_modes = 16
-fno_hidden_channels = 64
+epochs = 5000
+fno_modes = 32
+fno_hidden_channels = 128
+n_layers = 3
+lr = 1e-3
 
 
 # 데이터 로딩 및 전처리
@@ -40,7 +41,7 @@ with h5py.File(mat_file, 'r') as mat:
 
     n_para, n_data = input_nond.shape
     _, n_vel = w_vec.shape
-    n_rdc_coeffs = rdc.shape[0] # 6 (M, m, C, c, K, k)
+    n_rdc_coeffs = rdc.shape[0] # 6 (K, k, C, c, M, m)
 
     # 입력 데이터 (X): 형상 파라미터 [nData, nPara]
     X_params = input_nond.T
@@ -62,7 +63,7 @@ scaler_X = StandardScaler()
 X_scaled = scaler_X.fit_transform(X_params) 
 
 scaler_Y = StandardScaler()
-channel_data = y_functions[:, 0, :].reshape(-1, 1)
+channel_data = y_functions[:, 1, :].reshape(-1, 1)
 y_scaled = scaler_Y.fit_transform(channel_data).reshape(n_data, n_vel)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -99,7 +100,7 @@ class ParametricFNO(nn.Module):
     기존: 형상 파라미터를 조건으로 받아 함수를 예측하는 FNO 모델 (단일 네트워크)
     outputs: [B, out_channels, n_vel]
     """
-    def __init__(self, n_params, param_embedding_dim, fno_modes, fno_hidden_channels, in_channels, out_channels):
+    def __init__(self, n_params, param_embedding_dim, fno_modes, fno_hidden_channels, in_channels, out_channels,n_layers):
         super().__init__()
         self.n_params = n_params
         self.param_encoder = nn.Sequential(
@@ -110,6 +111,7 @@ class ParametricFNO(nn.Module):
         self.fno = FNO(
             n_modes=(fno_modes,),
             hidden_channels=fno_hidden_channels,
+            n_layers=n_layers,
             in_channels=in_channels + param_embedding_dim,
             out_channels=out_channels
         )
@@ -134,10 +136,11 @@ model = ParametricFNO(
     fno_modes=fno_modes,
     fno_hidden_channels=fno_hidden_channels,
     in_channels=1,
-    out_channels=1
+    out_channels=1,
+    n_layers=n_layers
     # out_channels=n_rdc_coeffs
 ).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 model_save_path = os.path.join(base_dir, 'fno_seal_best_single.pth')
 
@@ -182,4 +185,44 @@ test_params = X_tensor[test_dataset.indices].to(device)
 grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
 with torch.no_grad():
     predictions_scaled = model(test_params, grid_repeated).cpu().numpy()
+# %%
+# --- Validation on Test Set ---
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+model.eval()
+test_params = X_tensor[test_dataset.indices].to(device)
+test_targets = y_tensor[test_dataset.indices].to(device)
+grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
+
+with torch.no_grad():
+    preds_scaled = model(test_params, grid_repeated).cpu().numpy()
+    targets_scaled = test_targets.cpu().numpy()
+
+# 역스케일링
+preds_orig = scaler_Y.inverse_transform(preds_scaled.squeeze(1))
+targets_orig = scaler_Y.inverse_transform(targets_scaled.squeeze(1))
+
+# 성능 지표 계산
+mse = mean_squared_error(targets_orig.flatten(), targets_orig.flatten())
+mae = mean_absolute_error(preds_orig.flatten(), targets_orig.flatten())
+rel_lp = criterion(torch.tensor(preds_scaled), torch.tensor(targets_scaled)).item()
+
+print(f"Test MSE: {mse:.4f}")
+print(f"Test MAE: {mae:.4f}")
+print(f"Test Relative LpLoss: {rel_lp:.4f}")
+
+# 샘플 시각화
+n_plot = 5
+plt.figure(figsize=(10, 10))
+for i in range(n_plot):
+    idx = i
+    plt.subplot(n_plot, 1, i+1)
+    plt.plot(w, targets_orig[idx], label='True')
+    plt.plot(w, preds_orig[idx], '--', label='Predicted')
+    if i == 0:
+        plt.legend()
+plt.xlabel('Velocity')
+plt.ylabel('RDC Value')
+plt.tight_layout()
+plt.show()
 # %%
