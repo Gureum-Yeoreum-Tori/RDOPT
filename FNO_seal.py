@@ -214,4 +214,56 @@ predictions_unscaled = scaler_y.inverse_transform(predictions_reshaped)
 
 # 플로팅을 위해 원래 형태로 복원 [n_test, nVel, nRDC]
 n_test_samples = len(test_indices)
-actuals = actuals_unscaled.reshape(n_test_samples, n_vel,
+actuals = actuals_unscaled.reshape(n_test_samples, n_vel, n_rdc_coeffs)
+predictions = predictions_unscaled.reshape(n_test_samples, n_vel, n_rdc_coeffs)
+
+# Visualize results for a few random samples
+num_samples_to_plot = 5
+random_indices_in_test = np.random.choice(n_test_samples, num_samples_to_plot, replace=False)
+
+rdc_labels = ['Kxx', 'Kxy', 'Kyx', 'Kyy', 'Cxx', 'Cxy']
+
+for i in random_indices_in_test:
+    fig, axes = plt.subplots(3, 2, figsize=(15, 18))
+    axes = axes.ravel()
+    original_index = test_indices[i]
+    fig.suptitle(f'Test Sample #{original_index}: Actual vs. Predicted RDC vs. Speed (FNO)', fontsize=20)
+    
+    for j in range(n_rdc_coeffs):
+        ax = axes[j]
+        ax.plot(w_vec.flatten(), actuals[i, :, j], 'bo-', label='Actual')
+        ax.plot(w_vec.flatten(), predictions[i, :, j], 'ro--', label='Predicted')
+        ax.set_title(rdc_labels[j])
+        ax.set_xlabel('Rotational Speed (rad/s)')
+        ax.set_ylabel('RDC Value')
+        ax.legend()
+        ax.grid(True)
+        
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    plt.show()
+predictions = predictions_unscaled.reshape(n_test_samples, n_vel, n_rdc_coeffs)
+
+# Visualize results for a few random samples
+num_samples_to_plot = 5
+random_indices_in_test = np.random.choice(n_test_samples, num_samples_to_plot, replace=False)
+
+rdc_labels = ['Kxx', 'Kxy', 'Kyx', 'Kyy', 'Cxx', 'Cxy']
+
+for i in random_indices_in_test:
+    fig, axes = plt.subplots(3, 2, figsize=(15, 18))
+    axes = axes.ravel()
+    original_index = test_indices[i]
+    fig.suptitle(f'Test Sample #{original_index}: Actual vs. Predicted RDC vs. Speed (FNO)', fontsize=20)
+    
+    for j in range(n_rdc_coeffs):
+        ax = axes[j]
+        ax.plot(w_vec.flatten(), actuals[i, :, j], 'bo-', label='Actual')
+        ax.plot(w_vec.flatten(), predictions[i, :, j], 'ro--', label='Predicted')
+        ax.set_title(rdc_labels[j])
+        ax.set_xlabel('Rotational Speed (rad/s)')
+        ax.set_ylabel('RDC Value')
+        ax.legend()
+        ax.grid(True)
+        
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    plt.show()
