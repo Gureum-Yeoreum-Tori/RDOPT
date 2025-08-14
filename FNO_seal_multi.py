@@ -14,7 +14,8 @@ import neuralop as nop
 from neuralop.models import FNO
 # from neuralop.layers.spectral_convolution import SpectralConv
 
-# add_safe_globals([torch._C._nn.gelu, SpectralConv])
+# add_safe_globals([torch._C._nn.gelu])
+# add_safe_globals([nop.layers.spectral_convolution.SpectralConv])
 
 # 1. Load dataset.mat files
 data_dir = 'dataset/data/tapered_seal'
@@ -23,7 +24,7 @@ mat_file = os.path.join(data_dir, '20250812_T_113003', 'dataset.mat')
 # 파라미터 설정
 batch_size = 2**10
 criterion = nop.losses.LpLoss(d=1, p=2)
-epochs = 1000
+epochs = 10
 param_embedding_dim = 64
 fno_modes = 16
 fno_hidden_channels = 128
@@ -259,25 +260,113 @@ for epoch in range(epochs):
         best_val_loss = val_loss
         torch.save({'state_dict': model.state_dict()}, model_save_path)
     scheduler.step()
+    
+#%%
+network_path = os.path.join(base_dir, "fno_multihead.pth")
+# 저장
+ckpt = {
+    "state_dict": model.state_dict(),
+    "hparams": {
+        "param_embedding_dim": param_embedding_dim,
+        "fno_modes": fno_modes,
+        "fno_hidden_channels": fno_hidden_channels,
+        "n_layers": n_layers,
+        "shared_out_channels": shared_out_channels,
+        "n_params": n_para,
+        "n_heads": n_rdc_coeffs,
+    },
+    # 전처리 스케일러도 같이 저장하면 편함
+    "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
+    "scalers_y_mean": [s.mean_.ravel() for s in scalers_y],
+    "scalers_y_std":  [s.scale_.ravel() for s in scalers_y],
+}
+torch.save(ckpt, network_path)
 
+#%%
+model = MultiHeadParametricFNO(
+    n_params=n_para,
+    param_embedding_dim=param_embedding_dim,
+    fno_modes=fno_modes,
+    fno_hidden_channels=fno_hidden_channels,
+    in_channels=1,
+    n_heads=n_rdc_coeffs,
+    n_layers=n_layers,
+    shared_out_channels=shared_out_channels
+).to("cpu")
+ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
+sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
+model.load_state_dict(sd, strict=False)
+model.eval().to("cpu")
+
+
+
+L = int(grid_tensor.shape[0])  # 고정 길이
+dummy_params = torch.zeros(1, int(X_tensor.shape[1]))      # [B, n_params]
+dummy_grid   = torch.zeros(1, L, 1)                        # [B, L, 1]
+ts = torch.jit.trace(model, (dummy_params, dummy_grid))
+ts.save("fno_multihead_ts.pt")
+
+
+#%%
+# # 매트랩에서 쓸 수 있게 ONNX로 저장
+
+# L = grid_tensor.shape[0]                     # 학습 때 n_vel
+# dummy_params = torch.zeros(1, X_tensor.shape[1])   # [1, n_params]
+# dummy_grid   = torch.zeros(1, L, grid_tensor.shape[1]) # [1, L, Cg]
+# onnx_path = os.path.join(base_dir, "fno_multihead.onnx")
+
+# bad = [(k, type(v)) for k, v in model.state_dict().items() if not torch.is_tensor(v)]
+# print("Non-tensor entries in state_dict:", bad)
+
+# # 동적 길이/배치 허용 (batch, length)
+# dynamic_axes = {
+#     "params": {0: "batch"}, 
+#     "grid": {0: "batch", 1: "length"}, 
+#     "output": {0: "batch", 2: "length"}
+# }
+
+
+# torch.onnx.export(
+#     model.eval(),
+#     (dummy_params, dummy_grid),
+#     onnx_path,
+#     input_names=['params', 'grid'], 
+#     output_names=['output'],
+#     dynamic_axes=dynamic_axes, 
+#     opset_version=17, 
+#     do_constant_folding=True, 
+#     dynamo=True
+# )
+
+# print("saved:", onnx_path)
+
+# import numpy as np, scipy.io as sio
+# scaler_path = os.path.join(base_dir, "rdopt_scalers_multi.mat")
+
+# scalerX_mean = scaler_X.mean_
+# scalerX_std  = scaler_X.scale_
+# scalersY_mean = np.stack([s.mean_.reshape(-1) for s in scalers_y])   # [6, 1]
+# scalersY_std  = np.stack([s.scale_.reshape(-1) for s in scalers_y])  # [6, 1]
+# sio.savemat(scaler_path, dict(
+#     scalerX_mean=scalerX_mean, scalerX_std=scalerX_std,
+#     scalersY_mean=scalersY_mean, scalersY_std=scalersY_std
+# ))
+
+
+
+#%%
 # --- Evaluate ---
-ckpt = torch.load(model_save_path, map_location=device, weights_only=False)
-sd = ckpt.get('state_dict', ckpt)
-sd.pop('_metadata', None) 
-missing = model.load_state_dict(sd, strict=False)
-if missing.unexpected_keys:
-    print("unexpected:", missing.unexpected_keys)
-if missing.missing_keys:
-    print("missing:", missing.missing_keys)
-model.eval()
+
+model.eval() # 모델을 추론 모드로 바꿈
+
+# ckpt = torch.load(model_save_path, map_location=device, weights_only=False)
 
 n_test_samples = len(test_dataset.indices)
 test_params = X_tensor[test_dataset.indices].to(device)
 grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
 
-#%%
 # --- Validation on Test Set ---
-model.eval()
+
 test_params = X_tensor[test_dataset.indices].to(device)
 test_targets = y_tensor[test_dataset.indices].to(device)
 grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
@@ -370,7 +459,6 @@ print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
 
 import time
 
-model.eval()
 test_params = X_tensor[test_dataset.indices].to(device)
 test_targets = y_tensor[test_dataset.indices].to(device)
 grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
