@@ -28,10 +28,11 @@ param_embedding_dim = 16
 fno_modes = 16
 fno_hidden_channels = 64
 n_layers = 3
+shared_out_channels = fno_hidden_channels
 lr = 1e-3
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
-
+weight_decay=1e-4
 
 # 데이터 로딩 및 전처리
 with h5py.File(mat_file, 'r') as mat:
@@ -65,14 +66,22 @@ with h5py.File(mat_file, 'r') as mat:
 scaler_X = StandardScaler()
 X_scaled = scaler_X.fit_transform(X_params) 
 
-scaler_Y = StandardScaler()
-channel_data = y_functions[:, 1, :].reshape(-1, 1)
-y_scaled = scaler_Y.fit_transform(channel_data).reshape(n_data, n_vel)
+scalers_y = [StandardScaler() for _ in range(n_rdc_coeffs)]
+y_scaled_channels = []
+for i in range(n_rdc_coeffs):
+    # 각 채널(RDC)의 데이터를 [n_data * n_vel, 1] 형태로 만들어 스케일러에 적용
+    channel_data = y_functions[:, i, :].reshape(-1, 1)
+    scaled_channel_data = scalers_y[i].fit_transform(channel_data)
+    # 원래 형태 [n_data, n_vel]로 복원
+    y_scaled_channels.append(scaled_channel_data.reshape(n_data, n_vel))
+
+# 스케일링된 채널들을 다시 [n_data, n_rdc_coeffs, n_vel]
+y_scaled = np.stack(y_scaled_channels, axis=1)
 
 # Torch 텐서로 변환
 X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
-# y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
-y_tensor = torch.tensor(y_scaled, dtype=torch.float32).unsqueeze(1)
+y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
+# y_tensor = torch.tensor(y_scaled, dtype=torch.float32).unsqueeze(1)
 grid_tensor = torch.tensor(grid, dtype=torch.float32)
 
 # 데이터셋 및 데이터로더 생성
@@ -93,8 +102,6 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-
-# %%
 class ParametricFNO(nn.Module):
     """
     기존: 형상 파라미터를 조건으로 받아 함수를 예측하는 FNO 모델 (단일 네트워크)
@@ -123,6 +130,51 @@ class ParametricFNO(nn.Module):
         fno_in = torch.cat([grid, pe], dim=-1).permute(0, 2, 1)  # [B, 1+emb, n_vel]
         out = self.fno(fno_in)  # [B, out_channels, n_vel]
         return out
+    
+class MultiHeadParametricFNO(nn.Module):
+    """
+    FNO 본체는 공유하고, 채널별 1x1 Conv1d 헤드를 분리하는 멀티헤드 구조.
+    outputs: [B, n_heads(=n_rdc_coeffs), n_vel]
+    """
+    def __init__(self, n_params, param_embedding_dim, fno_modes, fno_hidden_channels, in_channels, n_heads,n_layers, shared_out_channels):
+        super().__init__()
+        self.n_params = n_params
+        self.param_encoder = nn.Sequential(
+            nn.Linear(n_params, param_embedding_dim),
+            nn.ReLU(),
+            nn.Linear(param_embedding_dim, param_embedding_dim)
+        )
+        self.trunk = FNO(
+            n_modes=(fno_modes,),
+            hidden_channels=fno_hidden_channels,
+            n_layers=n_layers,
+            in_channels=in_channels + param_embedding_dim,
+            out_channels=shared_out_channels
+        )
+        
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv1d(shared_out_channels, shared_out_channels, 1),
+                nn.GELU(),
+                nn.BatchNorm1d(shared_out_channels),
+                nn.Dropout(0.1),
+                # depth 2
+                nn.Conv1d(shared_out_channels, shared_out_channels // 2, 1),
+                nn.GELU(),
+                nn.BatchNorm1d(shared_out_channels // 2),
+                nn.Dropout(0.1),
+                # output
+                nn.Conv1d(shared_out_channels // 2, 1, 1)
+            ) for _ in range(n_heads)
+        ])
+
+    def forward(self, params, grid):
+        pe = self.param_encoder(params)                       # [B, emb]
+        pe = pe.unsqueeze(1).repeat(1, grid.shape[1], 1)     # [B, n_vel, emb]
+        x = torch.cat([grid, pe], dim=-1).permute(0, 2, 1)   # [B, 1+emb, n_vel]
+        feat = self.trunk(x)                                  # [B, Csh, n_vel]
+        outs = [head(feat) for head in self.heads]            # each: [B,1,n_vel]
+        return torch.cat(outs, dim=1)                         # [B, n_heads, n_vel]
 
 optimizer = None
 best_val_loss = float('inf')
@@ -130,19 +182,21 @@ base_dir = 'net'
 os.makedirs(base_dir, exist_ok=True)
 
 #%%
-model = ParametricFNO(
+
+model = MultiHeadParametricFNO(
     n_params=n_para,
     param_embedding_dim=param_embedding_dim,
     fno_modes=fno_modes,
     fno_hidden_channels=fno_hidden_channels,
     in_channels=1,
-    out_channels=1,
-    n_layers=n_layers
-    # out_channels=n_rdc_coeffs
+    n_heads=n_rdc_coeffs,
+    n_layers=n_layers,
+    shared_out_channels=shared_out_channels
 ).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-model_save_path = os.path.join(base_dir, 'fno_seal_best_single.pth')
+model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead.pth')
 
 for epoch in range(epochs):
     model.train(); train_loss = 0.0
@@ -183,8 +237,6 @@ model.eval()
 n_test_samples = len(test_dataset.indices)
 test_params = X_tensor[test_dataset.indices].to(device)
 grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
-with torch.no_grad():
-    predictions_scaled = model(test_params, grid_repeated).cpu().numpy()
 
 #%%
 # --- Validation on Test Set ---
@@ -193,46 +245,36 @@ test_params = X_tensor[test_dataset.indices].to(device)
 test_targets = y_tensor[test_dataset.indices].to(device)
 grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
 
-with torch.no_grad():
+with torch.no_grad(): # 예측하는 부분인듯
     preds_scaled = model(test_params, grid_repeated).cpu().numpy()
     targets_scaled = test_targets.cpu().numpy()
 
-# 역스케일링
-preds_orig = scaler_Y.inverse_transform(preds_scaled.squeeze(1))
-targets_orig = scaler_Y.inverse_transform(targets_scaled.squeeze(1))
+preds_tmp, targets_tmp = [], []
+for i in range(n_rdc_coeffs):
+    targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]))
+targets_orig = np.stack(targets_tmp, axis=1)
+preds_orig = y_functions[test_dataset.indices]
 
+#%%
 # 샘플 시각화
-# 로그 스케일, 전체
+import matplotlib.colors as mcolors
+# mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
+rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
+    
 n_plot = 5
-plt.figure(figsize=(10, 10))
-cmap = plt.get_cmap('tab20')
+for j in range(n_rdc_coeffs):
+    plt.figure(figsize=(10, 8))
+    for idx in range(n_plot):
+        color = mcolors_list[idx % len(mcolors_list)] 
+        plt.plot(w, targets_orig[idx,j,:], color=color, linestyle='-', label=f"True, #{test_dataset.indices[idx]}")
+        plt.plot(w, preds_orig[idx,j,:], color=color, linestyle='--', marker='o', markersize=3, label=f"Pred, #{test_dataset.indices[idx]}")
+    plt.legend()
+    plt.grid(True)
+    plt.xlabel('Rotational speed [rad/s]')
+    plt.ylabel('RDC Value')
+    plt.tight_layout(rect=(0, 0.03, 1, 0.96)); plt.show()
 
-for i in range(n_plot):
-    idx = i
-    color = cmap(i % 20)  # 컬러맵에서 색상 선택
-
-    plt.semilogy(w, targets_orig[idx], color=color, linestyle='-', label=f"True {idx}")
-    plt.semilogy(w, preds_orig[idx], color=color, linestyle='--', marker='o', markersize=3, label=f"Pred {idx}")
-
-plt.legend()
-plt.xlabel('Velocity')
-plt.ylabel('RDC Value')
-plt.tight_layout()
-plt.show()
-
-# n_plot = 5
-# plt.figure(figsize=(10, 10))
-# for i in range(n_plot):
-#     idx = i
-#     plt.subplot(n_plot, 1, i+1)
-#     plt.plot(w, targets_orig[idx], label='True')
-#     plt.plot(w, preds_orig[idx], '--', label='Predicted')
-#     if i == 0:
-#         plt.legend()
-# plt.xlabel('Velocity')
-# plt.ylabel('RDC Value')
-# plt.tight_layout()
-# plt.show()
 
 # %%
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
