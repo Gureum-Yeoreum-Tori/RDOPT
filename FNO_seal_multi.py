@@ -21,18 +21,32 @@ data_dir = 'dataset/data/tapered_seal'
 mat_file = os.path.join(data_dir, '20250812_T_113003', 'dataset.mat')
 
 # 파라미터 설정
-batch_size = 2**9
+batch_size = 2**10
 criterion = nop.losses.LpLoss(d=1, p=2)
 epochs = 1000
-param_embedding_dim = 16
+param_embedding_dim = 64
 fno_modes = 16
-fno_hidden_channels = 64
-n_layers = 3
+fno_hidden_channels = 128
+n_layers = 4
 shared_out_channels = fno_hidden_channels
 lr = 1e-3
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 weight_decay=1e-4
+
+import json
+
+hyperparams = {
+    "Batch size": batch_size,
+    "Parameter embedding dimension": param_embedding_dim,
+    "# of FNO modes": fno_modes,
+    "# of FNO hidden channels": fno_hidden_channels,
+    "# of FNO layers": n_layers,
+    "# of shared output channels": shared_out_channels,
+    "Learning rate": f"{lr:.1e}"
+}
+
+print(json.dumps(hyperparams, indent=2))
 
 # 데이터 로딩 및 전처리
 with h5py.File(mat_file, 'r') as mat:
@@ -62,21 +76,44 @@ with h5py.File(mat_file, 'r') as mat:
 
 
 # %%
-# 데이터 스케일링
-scaler_X = StandardScaler()
-X_scaled = scaler_X.fit_transform(X_params) 
+# # 데이터 스케일링
+# scaler_X = StandardScaler()
+# X_scaled = scaler_X.fit_transform(X_params) 
 
-scalers_y = [StandardScaler() for _ in range(n_rdc_coeffs)]
-y_scaled_channels = []
+# scalers_y = [StandardScaler() for _ in range(n_rdc_coeffs)]
+# y_scaled_channels = []
+# for i in range(n_rdc_coeffs):
+#     # 각 채널(RDC)의 데이터를 [n_data * n_vel, 1] 형태로 만들어 스케일러에 적용
+#     channel_data = y_functions[:, i, :].reshape(-1, 1)
+#     scaled_channel_data = scalers_y[i].fit_transform(channel_data)
+#     # 원래 형태 [n_data, n_vel]로 복원
+#     y_scaled_channels.append(scaled_channel_data.reshape(n_data, n_vel))
+
+# # 스케일링된 채널들을 다시 [n_data, n_rdc_coeffs, n_vel]
+# y_scaled = np.stack(y_scaled_channels, axis=1)
+
+
+indices = np.arange(n_data)
+train_size = int(n_data*0.7); val_size = int(n_data*0.15)
+test_size = n_data - train_size - val_size
+train_idx, val_idx, test_idx = np.split(np.random.permutation(indices),
+                                        [train_size, train_size+val_size])
+
+scaler_X = StandardScaler().fit(X_params[train_idx])
+X_scaled = np.empty_like(X_params, dtype=float)
+X_scaled[train_idx] = scaler_X.transform(X_params[train_idx])
+X_scaled[val_idx]  = scaler_X.transform(X_params[val_idx])
+X_scaled[test_idx] = scaler_X.transform(X_params[test_idx])
+
+scalers_y = [StandardScaler().fit(y_functions[train_idx, i, :].reshape(-1,1))
+             for i in range(n_rdc_coeffs)]
+
+y_scaled = np.empty_like(y_functions, dtype=float)
 for i in range(n_rdc_coeffs):
-    # 각 채널(RDC)의 데이터를 [n_data * n_vel, 1] 형태로 만들어 스케일러에 적용
-    channel_data = y_functions[:, i, :].reshape(-1, 1)
-    scaled_channel_data = scalers_y[i].fit_transform(channel_data)
-    # 원래 형태 [n_data, n_vel]로 복원
-    y_scaled_channels.append(scaled_channel_data.reshape(n_data, n_vel))
-
-# 스케일링된 채널들을 다시 [n_data, n_rdc_coeffs, n_vel]
-y_scaled = np.stack(y_scaled_channels, axis=1)
+    for split_idx in (train_idx, val_idx, test_idx):
+        y_scaled[split_idx, i, :] = scalers_y[i].transform(
+            y_functions[split_idx, i, :].reshape(-1,1)
+        ).reshape(-1, y_functions.shape[-1])
 
 # Torch 텐서로 변환
 X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
@@ -251,16 +288,19 @@ with torch.no_grad(): # 예측하는 부분인듯
 
 preds_tmp, targets_tmp = [], []
 for i in range(n_rdc_coeffs):
-    targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]))
+    preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
+    targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
+
+preds_orig   = np.stack(preds_tmp,   axis=1)
 targets_orig = np.stack(targets_tmp, axis=1)
-preds_orig = y_functions[test_dataset.indices]
 
 #%%
 # 샘플 시각화
 import matplotlib.colors as mcolors
-# mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
-mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
+mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+# mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
 rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
+rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
     
 n_plot = 5
 for j in range(n_rdc_coeffs):
@@ -272,30 +312,57 @@ for j in range(n_rdc_coeffs):
     plt.legend()
     plt.grid(True)
     plt.xlabel('Rotational speed [rad/s]')
-    plt.ylabel('RDC Value')
+    plt.ylabel(f"{rdc_units[j]}")
+    plt.title(f"{rdc_labels[j]}")
     plt.tight_layout(rect=(0, 0.03, 1, 0.96)); plt.show()
 
-
-# %%
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-# preds_orig, targets_orig: [N, n_vel] (이미 계산돼 있다고 가정)
-y_true = np.ravel(targets_orig)
-y_pred = np.ravel(preds_orig)
+for coeff_idx, label in enumerate(rdc_labels):
+    y_true = np.ravel(targets_orig[:, coeff_idx, :])
+    y_pred = np.ravel(preds_orig[:, coeff_idx, :])
 
-mse  = mean_squared_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(y_true, y_pred)
+    r2 = r2_score(y_true, y_pred)
+    yrng = (y_true.max() - y_true.min())
+    rrmse = rmse / (yrng + 1e-12)
+    mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
+
+    print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+          f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+
+# 전체 지표
+y_true_all = np.ravel(targets_orig)
+y_pred_all = np.ravel(preds_orig)
+mse = mean_squared_error(y_true_all, y_pred_all)
 rmse = np.sqrt(mse)
-mae  = mean_absolute_error(y_true, y_pred)
-r2   = r2_score(y_true, y_pred)
-
-# 상대 지표
-yrng = (y_true.max() - y_true.min())
+mae = mean_absolute_error(y_true_all, y_pred_all)
+r2 = r2_score(y_true_all, y_pred_all)
+yrng = (y_true_all.max() - y_true_all.min())
 rrmse = rmse / (yrng + 1e-12)
+mape = np.mean(np.abs((y_true_all - y_pred_all) / (np.abs(y_true_all) + 1e-12)))
 
-mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
+print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+      f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
 
-print(f"RMSE: {rmse:.6g}")
-print(f"MAE : {mae:.6g}")
-print(f"R^2 : {r2:.6f}")
-print(f"rRMSE (vs range): {100*rrmse:.4f}%")
-print(f"MAPE : {100*mape:.4f}%")
+import time
+
+model.eval()
+test_params = X_tensor[test_dataset.indices].to(device)
+test_targets = y_tensor[test_dataset.indices].to(device)
+grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
+
+# 예측 시간 측정
+with torch.no_grad():
+    torch.cuda.synchronize()  # GPU 시간 측정 전 동기화
+    start_time = time.time()
+
+    preds_scaled = model(test_params, grid_repeated)
+
+    torch.cuda.synchronize()
+    end_time = time.time()
+
+print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
+print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
