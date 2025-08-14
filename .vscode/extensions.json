@@ -9,6 +9,7 @@
     "ms-toolsai.jupyter",
     "h5web.h5web",
     "ms-vscode.data-wrangler",
-    "percy.vscode-numpy-viewer"
+    "percy.vscode-numpy-viewer",
+    "google.geminicodeassist",
   ]
 }
