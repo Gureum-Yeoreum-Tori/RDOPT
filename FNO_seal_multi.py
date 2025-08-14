@@ -24,7 +24,7 @@ mat_file = os.path.join(data_dir, '20250812_T_113003', 'dataset.mat')
 # 파라미터 설정
 batch_size = 2**10
 criterion = nop.losses.LpLoss(d=1, p=2)
-epochs = 10
+epochs = 1000
 param_embedding_dim = 64
 fno_modes = 16
 fno_hidden_channels = 128
@@ -298,12 +298,16 @@ sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
 model.load_state_dict(sd, strict=False)
 model.eval().to("cpu")
 
+# --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
+L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
+dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
+dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
 
+# ts = torch.jit.trace(model, (dummy_params, dummy_grid))
 
-L = int(grid_tensor.shape[0])  # 고정 길이
-dummy_params = torch.zeros(1, int(X_tensor.shape[1]))      # [B, n_params]
-dummy_grid   = torch.zeros(1, L, 1)                        # [B, L, 1]
-ts = torch.jit.trace(model, (dummy_params, dummy_grid))
+with torch.no_grad():
+    ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
+    
 ts.save("fno_multihead_ts.pt")
 
 
