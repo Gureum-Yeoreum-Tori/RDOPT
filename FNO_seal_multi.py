@@ -303,18 +303,39 @@ rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
 rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
     
 n_plot = 5
+fig, axes = plt.subplots(3, 2, figsize=(18, 14))
+axes = axes.flatten()  # 2D -> 1D 배열로 변환
+
 for j in range(n_rdc_coeffs):
-    plt.figure(figsize=(10, 8))
+    ax = axes[j]
     for idx in range(n_plot):
-        color = mcolors_list[idx % len(mcolors_list)] 
-        plt.plot(w, targets_orig[idx,j,:], color=color, linestyle='-', label=f"True, #{test_dataset.indices[idx]}")
-        plt.plot(w, preds_orig[idx,j,:], color=color, linestyle='--', marker='o', markersize=3, label=f"Pred, #{test_dataset.indices[idx]}")
-    plt.legend()
-    plt.grid(True)
-    plt.xlabel('Rotational speed [rad/s]')
-    plt.ylabel(f"{rdc_units[j]}")
-    plt.title(f"{rdc_labels[j]}")
-    plt.tight_layout(rect=(0, 0.03, 1, 0.96)); plt.show()
+        color = mcolors_list[idx % len(mcolors_list)]
+        ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
+                label=f"True, #{test_dataset.indices[idx]}")
+        ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
+                label=f"Pred, #{test_dataset.indices[idx]}")
+    ax.set_xlabel('Rotational speed [rad/s]')
+    ax.set_ylabel(f"{rdc_units[j]}")
+    ax.set_title(f"{rdc_labels[j]}")
+    ax.grid(True)
+    ax.legend()
+
+plt.tight_layout(rect=(0, 0.03, 1, 0.96))
+plt.show()
+
+# n_plot = 5
+# for j in range(n_rdc_coeffs):
+#     plt.figure(figsize=(8, 6))
+#     for idx in range(n_plot):
+#         color = mcolors_list[idx % len(mcolors_list)] 
+#         plt.plot(w, targets_orig[idx,j,:], color=color, linestyle='-', label=f"True, #{test_dataset.indices[idx]}")
+#         plt.plot(w, preds_orig[idx,j,:], color=color, linestyle='--', marker='o', markersize=3, label=f"Pred, #{test_dataset.indices[idx]}")
+#     plt.legend()
+#     plt.grid(True)
+#     plt.xlabel('Rotational speed [rad/s]')
+#     plt.ylabel(f"{rdc_units[j]}")
+#     plt.title(f"{rdc_labels[j]}")
+#     plt.tight_layout(rect=(0, 0.03, 1, 0.96)); plt.show()
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
