@@ -127,7 +127,7 @@ X_scaled = (X_params - scaler_X_mean) / (scaler_X_std + 1e-12)
 # ----------------- 내삽 쿼리 그리드 준비 -----------------
 B_eval  = min(200, len(test_idx))
 idx_eval = test_idx[:B_eval]
-n_query = 64
+n_query = 14
 
 wq = np.linspace(wmin, wmax, n_query, dtype=np.float32)
 wq_norm = norm_w(wq).astype(np.float32)                 # [-1,1]
