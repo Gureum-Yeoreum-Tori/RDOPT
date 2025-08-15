@@ -24,11 +24,11 @@ mat_file = os.path.join(data_dir, '20250812_T_113003', 'dataset.mat')
 # 파라미터 설정
 batch_size = 2**10
 criterion = nop.losses.LpLoss(d=1, p=2)
-epochs = 1000
+epochs = 2000
 param_embedding_dim = 64
-fno_modes = 16
+fno_modes = 4
 fno_hidden_channels = 128
-n_layers = 4
+n_layers = 3
 shared_out_channels = fno_hidden_channels
 lr = 1e-3
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -283,35 +283,6 @@ ckpt = {
 torch.save(ckpt, network_path)
 
 #%%
-model = MultiHeadParametricFNO(
-    n_params=n_para,
-    param_embedding_dim=param_embedding_dim,
-    fno_modes=fno_modes,
-    fno_hidden_channels=fno_hidden_channels,
-    in_channels=1,
-    n_heads=n_rdc_coeffs,
-    n_layers=n_layers,
-    shared_out_channels=shared_out_channels
-).to("cpu")
-ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
-sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
-model.load_state_dict(sd, strict=False)
-model.eval().to("cpu")
-
-# --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
-L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
-dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
-dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
-
-# ts = torch.jit.trace(model, (dummy_params, dummy_grid))
-
-with torch.no_grad():
-    ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
-    
-ts.save("fno_multihead_ts.pt")
-
-
-#%%
 # # 매트랩에서 쓸 수 있게 ONNX로 저장
 
 # L = grid_tensor.shape[0]                     # 학습 때 n_vel
@@ -360,24 +331,15 @@ ts.save("fno_multihead_ts.pt")
 
 #%%
 # --- Evaluate ---
-
 model.eval() # 모델을 추론 모드로 바꿈
-
-# ckpt = torch.load(model_save_path, map_location=device, weights_only=False)
 
 n_test_samples = len(test_dataset.indices)
 test_params = X_tensor[test_dataset.indices].to(device)
 grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
 
-# --- Validation on Test Set ---
-
-test_params = X_tensor[test_dataset.indices].to(device)
-test_targets = y_tensor[test_dataset.indices].to(device)
-grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
-
 with torch.no_grad(): # 예측하는 부분인듯
     preds_scaled = model(test_params, grid_repeated).cpu().numpy()
-    targets_scaled = test_targets.cpu().numpy()
+    targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
 
 preds_tmp, targets_tmp = [], []
 for i in range(n_rdc_coeffs):
@@ -479,3 +441,32 @@ with torch.no_grad():
 
 print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
 print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
+
+#%%
+model = MultiHeadParametricFNO(
+    n_params=n_para,
+    param_embedding_dim=param_embedding_dim,
+    fno_modes=fno_modes,
+    fno_hidden_channels=fno_hidden_channels,
+    in_channels=1,
+    n_heads=n_rdc_coeffs,
+    n_layers=n_layers,
+    shared_out_channels=shared_out_channels
+).to("cpu")
+ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
+sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
+model.load_state_dict(sd, strict=False)
+model.eval().to("cpu")
+
+# --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
+L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
+dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
+dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
+
+# ts = torch.jit.trace(model, (dummy_params, dummy_grid))
+
+with torch.no_grad():
+    ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
+
+network_path = os.path.join(base_dir, "fno_multihead_ts.pt")
+ts.save(network_path)
