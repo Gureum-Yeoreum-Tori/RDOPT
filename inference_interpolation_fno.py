@@ -5,12 +5,13 @@ import torch
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import time
 
 # ----------------- 경로/옵션 -----------------
 DATA_DIR   = 'dataset/data/tapered_seal'
 MAT_FILE   = os.path.join(DATA_DIR, '20250812_T_113003', 'dataset.mat')
 CKPT_PATH  = 'net/fno_multihead.pth'        # state_dict 저장본(.pth)
-TS_PATH    = 'fno_multihead_ts.pt'          # TorchScript 저장본(.pt)
+TS_PATH    = 'net/fno_multihead_ts.pt'          # TorchScript 저장본(.pt)
 USE_TS     = False                           # True: TorchScript 경로, False: state_dict 경로
 DEVICE     = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -124,7 +125,7 @@ X_scaled = (X_params - scaler_X_mean) / (scaler_X_std + 1e-12)
 
 # y는 평가 때 역스케일이 필요하므로 통계만 보관
 # ----------------- 내삽 쿼리 그리드 준비 -----------------
-B_eval  = min(32, len(test_idx))
+B_eval  = min(200, len(test_idx))
 idx_eval = test_idx[:B_eval]
 n_query = 64
 
@@ -133,10 +134,14 @@ wq_norm = norm_w(wq).astype(np.float32)                 # [-1,1]
 grid_q = torch.from_numpy(wq_norm[:, None]).unsqueeze(0)  # [1, Lq, 1]
 grid_q = grid_q.to(DEVICE).repeat(B_eval, 1, 1)
 
+start_time = time.time()
 # ----------------- 모델 추론 -----------------
 with torch.no_grad():
     params_batch = torch.tensor(X_scaled[idx_eval], dtype=torch.float32, device=DEVICE)
     preds_scaled_q = model(params_batch, grid_q).cpu().numpy()     # [B, 6, Lq]
+end_time = time.time()
+print(f"Inference time for {B_eval} samples: {end_time - start_time:.6f} seconds")
+print(f"Average per sample: {(end_time - start_time)/B_eval:.6f} seconds")
 
 # 역스케일
 preds_orig_q = np.empty_like(preds_scaled_q)
