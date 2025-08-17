@@ -1,5 +1,6 @@
 # no dataset dir
 /dataset
+ng*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
