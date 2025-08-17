@@ -77,23 +77,6 @@ with h5py.File(mat_file, 'r') as mat:
 
 
 # %%
-# # 데이터 스케일링
-# scaler_X = StandardScaler()
-# X_scaled = scaler_X.fit_transform(X_params) 
-
-# scalers_y = [StandardScaler() for _ in range(n_rdc_coeffs)]
-# y_scaled_channels = []
-# for i in range(n_rdc_coeffs):
-#     # 각 채널(RDC)의 데이터를 [n_data * n_vel, 1] 형태로 만들어 스케일러에 적용
-#     channel_data = y_functions[:, i, :].reshape(-1, 1)
-#     scaled_channel_data = scalers_y[i].fit_transform(channel_data)
-#     # 원래 형태 [n_data, n_vel]로 복원
-#     y_scaled_channels.append(scaled_channel_data.reshape(n_data, n_vel))
-
-# # 스케일링된 채널들을 다시 [n_data, n_rdc_coeffs, n_vel]
-# y_scaled = np.stack(y_scaled_channels, axis=1)
-
-
 indices = np.arange(n_data)
 train_size = int(n_data*0.7); val_size = int(n_data*0.15)
 test_size = n_data - train_size - val_size
@@ -119,7 +102,6 @@ for i in range(n_rdc_coeffs):
 # Torch 텐서로 변환
 X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
 y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
-# y_tensor = torch.tensor(y_scaled, dtype=torch.float32).unsqueeze(1)
 grid_tensor = torch.tensor(grid, dtype=torch.float32)
 
 # 데이터셋 및 데이터로더 생성
