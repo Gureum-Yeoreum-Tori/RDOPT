@@ -19,7 +19,7 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # tapered_seal.py 에서 가져온 솔버 기본 설정
 wRange = np.array([1500, 5000]) * np.pi / 30
-w_vec = np.linspace(wRange[0], wRange[1] * 1.25, 34) # 학습에 사용된 속도 그리드
+w_vec = np.linspace(wRange[0], wRange[1] * 1.25, 14) # 학습에 사용된 속도 그리드
 
 # Ds = 0.22
 # Ls = 0.02
@@ -57,7 +57,7 @@ inputVec = np.array(list(itertools.product(vhIn, vhOut, vPsr)))
 
 # 솔버와 FNO에 대해 실행할 케이스 수를 별도로 설정
 num_solver_cases = 5
-num_fno_cases = 5000
+num_fno_cases = 10000
 # print(f"Using device: {DEVICE}")
 
 # --- 2. FNO 모델 아키텍처 정의 (inference_interpolation_fno.py와 동일) ---
@@ -192,36 +192,36 @@ rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
 # FNO 결과에서 솔버 케이스에 해당하는 예측을 찾기 위한 인덱스 매핑
 fno_idx_map = {original_idx: i for i, original_idx in enumerate(fno_test_indices)}
 
-# for idx in solver_test_indices:
-#     print(f"\n--- Verifying Case (inputVec index: {idx}) ---")
+for idx in solver_test_indices:
+    print(f"\n--- Verifying Case (inputVec index: {idx}) ---")
 
-#     # 솔버 결과(Ground Truth)와 FNO 예측 결과 가져오기
-#     rdc_solver_truth = solver_results[idx]
-#     fno_pred_idx = fno_idx_map[idx]
-#     rdc_fno_pred = pred_orig_batch[fno_pred_idx]
+    # 솔버 결과(Ground Truth)와 FNO 예측 결과 가져오기
+    rdc_solver_truth = solver_results[idx]
+    fno_pred_idx = fno_idx_map[idx]
+    rdc_fno_pred = pred_orig_batch[fno_pred_idx]
 
-#     # 백분율 오차(Percentage Error) 시각화
-#     fig, axes = plt.subplots(3, 2, figsize=(15, 12))
-#     fig.suptitle(f"Percentage Error: inputVec index {idx}", fontsize=16)
-#     axes = axes.flatten()
+    # 백분율 오차(Percentage Error) 시각화
+    fig, axes = plt.subplots(3, 2, figsize=(15, 12))
+    fig.suptitle(f"Percentage Error: inputVec index {idx}", fontsize=16)
+    axes = axes.flatten()
 
-#     print("Percentage Error Comparison:")
-#     for i in range(n_rdc_coeffs):
-#         ax = axes[i]
-#         truth = rdc_solver_truth[i, :]
-#         pred = rdc_fno_pred[i, :]
-#         # 0으로 나누는 것을 방지하기 위해 작은 값(epsilon)을 더함
-#         percentage_error = np.abs((pred - truth) / (truth + 1e-12)) * 100
+    print("Percentage Error Comparison:")
+    for i in range(n_rdc_coeffs):
+        ax = axes[i]
+        truth = rdc_solver_truth[i, :]
+        pred = rdc_fno_pred[i, :]
+        # 0으로 나누는 것을 방지하기 위해 작은 값(epsilon)을 더함
+        percentage_error = np.abs((pred - truth) / (truth + 1e-12)) * 100
 
-#         ax.plot(w_vec, percentage_error, 'go-', label='Percentage Error (%)')
-#         ax.set_title(f"RDC: {rdc_labels[i]}")
-#         ax.set_xlabel('Rotational Speed (rad/s)')
-#         ax.set_ylabel('Percentage Error (%)')
-#         ax.grid(True); ax.legend()
-#         print(f"  - {rdc_labels[i]:<2}: Mean Percentage Error = {np.mean(percentage_error):.2f}%")
+        ax.plot(w_vec, percentage_error, 'go-', label='Percentage Error (%)')
+        ax.set_title(f"RDC: {rdc_labels[i]}")
+        ax.set_xlabel('Rotational Speed (rad/s)')
+        ax.set_ylabel('Percentage Error (%)')
+        ax.grid(True); ax.legend()
+        print(f"  - {rdc_labels[i]:<2}: Mean Percentage Error = {np.mean(percentage_error):.2f}%")
 
-#     plt.tight_layout(rect=[0, 0, 1, 0.96])
-#     plt.show()
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.show()
 
 # --- 8. 최종 실행 시간 비교 ---
 print("\n" + "="*50)
@@ -243,3 +243,52 @@ if avg_fno_time > 0 and avg_solver_time > 0:
     speedup = avg_solver_time / avg_fno_time
     print(f"\n>> FNO model is approximately {speedup:.2f}x faster than the solver (on a per-case basis).")
 print("="*50)
+
+#%%
+# --- 9. 전체 데이터셋에 대한 MAPE 검증 ---
+print("\n" + "="*50)
+print("     Full Dataset MAPE Validation (vs dataset.mat)")
+print("="*50)
+
+# 1. 데이터셋 로드 (FNO_seal_multi.py와 동일)
+data_dir = 'dataset/data/tapered_seal'
+mat_file = os.path.join(data_dir, '20250812_T_113003', 'dataset.mat')
+with h5py.File(mat_file, 'r') as mat:
+    input_nond_full = np.array(mat.get('inputNond'))
+    rdc_full = np.array(mat.get('RDC'))
+
+# 2. 데이터 전처리
+X_full = input_nond_full.T  # [nData, nPara]
+y_true_full = rdc_full.transpose(2, 0, 1) # [nData, 6, nVel]
+n_data_full = X_full.shape[0]
+print(f"Loaded {n_data_full} samples from {mat_file} for full validation.")
+
+# 3. FNO 추론
+# 입력 스케일링
+X_scaled_full = (X_full - scaler_X_mean) / (scaler_X_std + 1e-9)
+params_tensor_full = torch.tensor(X_scaled_full, dtype=torch.float32, device=DEVICE)
+
+# 그리드 준비
+w_norm = 2 * (w_vec - w_vec.min()) / (w_vec.max() - w_vec.min()) - 1.0
+grid_tensor_full = torch.tensor(w_norm, dtype=torch.float32).view(1, -1, 1).to(DEVICE)
+grid_tensor_full = grid_tensor_full.repeat(n_data_full, 1, 1)
+
+# 추론 실행
+with torch.no_grad():
+    preds_scaled_full = model(params_tensor_full, grid_tensor_full).cpu().numpy()
+
+# 4. 결과 역스케일링
+y_pred_full = preds_scaled_full * std_reshaped + mean_reshaped
+
+# 5. MAPE 계산 및 출력
+print("\nMAPE Results:")
+epsilon = 1e-12
+for i in range(n_rdc_coeffs):
+    mape = np.mean(np.abs((y_true_full[:, i, :] - y_pred_full[:, i, :]) / (np.abs(y_true_full[:, i, :]) + epsilon))) * 100
+    print(f"  - {rdc_labels[i]:<2}: {mape:.4f}%")
+
+overall_mape = np.mean(np.abs((y_true_full - y_pred_full) / (np.abs(y_true_full) + epsilon))) * 100
+print(f"\n  - Overall MAPE: {overall_mape:.4f}%")
+print("="*50)
+
+# %%
