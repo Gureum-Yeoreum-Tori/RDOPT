@@ -14,7 +14,7 @@ CKPT_PATH  = 'net/fno_multihead.pth'        # state_dict 저장본(.pth)
 TS_PATH    = 'net/fno_multihead_ts.pt'          # TorchScript 저장본(.pt)
 USE_TS     = False                           # True: TorchScript 경로, False: state_dict 경로
 DEVICE     = 'cuda' if torch.cuda.is_available() else 'cpu'
-
+n_plot = 3
 # ----------------- 유틸 -----------------
 def build_grids(w):
     w = np.asarray(w).ravel()
@@ -182,7 +182,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
 mcolors_list = list(mcolors.TABLEAU_COLORS.values())
-n_plot = min(5, B_eval)  # 최대 5개만 시각화
+n_plots = min(n_plot, B_eval)  # 최대 5개만 시각화
 
 rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
 rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
@@ -192,7 +192,7 @@ axes = axes.flatten()
 
 for ch in range(n_rdc_coeffs):
     ax = axes[ch]
-    for idx in range(n_plot):
+    for idx in range(n_plots):
         color = mcolors_list[idx % len(mcolors_list)]
         # GT: w 전체 구간
         ax.plot(

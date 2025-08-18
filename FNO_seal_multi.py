@@ -358,7 +358,7 @@ rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
 rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
     
 n_plot = 5
-fig, axes = plt.subplots(3, 2, figsize=(18, 14))
+fig, axes = plt.subplots(3, 2, figsize=(14, 10))
 axes = axes.flatten()  # 2D -> 1D 배열로 변환
 
 for j in range(n_rdc_coeffs):
