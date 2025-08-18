@@ -1,2 +1,2 @@
 # RDOPT
-Neural network based rotordynamic analysis
+Neural network based rotor system optimization
