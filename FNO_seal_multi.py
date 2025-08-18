@@ -26,9 +26,9 @@ batch_size = 2**10
 criterion = nop.losses.LpLoss(d=1, p=2)
 epochs = 2000
 param_embedding_dim = 64
-fno_modes = 4
+fno_modes = 8
 fno_hidden_channels = 64
-n_layers = 4
+n_layers = 6
 shared_out_channels = fno_hidden_channels
 lr = 1e-3
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
