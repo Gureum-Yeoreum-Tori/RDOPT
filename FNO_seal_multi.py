@@ -25,18 +25,18 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_file = '20250819_T_124655'
 
 mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
-mat_files = ('20250819_T_124655',)
+# mat_files = ('20250819_T_124655',)
 
 # 파라미터 설정
 batch_size = 2**8
 criterion = nop.losses.LpLoss(d=1, p=2)
 epochs = 4000
-param_embedding_dim = 128
+param_embedding_dim = 256
 fno_modes = 4
 fno_hidden_channels = 256
 n_layers = 2
 shared_out_channels = fno_hidden_channels
-lr = 1e-5
+lr = 1e-4
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 weight_decay=1e-5
@@ -116,14 +116,16 @@ class MultiHeadParametricFNO(nn.Module):
                 nn.Conv1d(shared_out_channels, shared_out_channels, 1),
                 nn.GELU(),
                 nn.Identity(),
-                nn.Dropout(0.1),
+                nn.Dropout(0.05),
                 # depth 2
-                nn.Conv1d(shared_out_channels, shared_out_channels // 2, 1),
+                # nn.Conv1d(shared_out_channels, shared_out_channels // 2, 1),
+                nn.Conv1d(shared_out_channels, shared_out_channels, 1),
                 nn.GELU(),
                 nn.Identity(),
-                nn.Dropout(0.1),
+                nn.Dropout(0.05),
                 # output
-                nn.Conv1d(shared_out_channels // 2, 1, 1)
+                # nn.Conv1d(shared_out_channels // 2, 1, 1)
+                nn.Conv1d(shared_out_channels, 1, 1)
             ) for _ in range(n_heads)
         ])
 
@@ -142,9 +144,9 @@ for mat_file in mat_files:
     
     base_dir = 'net'
     os.makedirs(base_dir, exist_ok=True)
-    model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead_'+mat_file+'.pth')
-    network_path = os.path.join(base_dir, 'fno_multihead_'+mat_file+'.pth')
-    network_path_ts = os.path.join(base_dir, 'fno_multihead_'+mat_file+'.pt')
+    model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead_'+mat_file+'_2'+'.pth')
+    network_path = os.path.join(base_dir, 'fno_multihead_'+mat_file+'_2'+'.pth')
+    network_path_ts = os.path.join(base_dir, 'fno_multihead_'+mat_file+'_2'+'.pt')
 
     # 데이터 로딩 및 전처리
     with h5py.File(mat_path, 'r') as mat:
@@ -155,6 +157,8 @@ for mat_file in mat_files:
         # RDC: [6, nVel, nData] 동특성 계수 (타겟 함수)
         rdc = np.array(mat.get('RDC'))
         rdc = rdc[2:6,:,:] # no mass
+        # rdc = rdc[2:4,:,:] # no mass
+        # rdc = rdc[2:3,:,:] # no mass
 
         n_para, n_data = input_nond.shape
         _, n_vel = w_vec.shape
@@ -259,7 +263,7 @@ for mat_file in mat_files:
                 outputs = model(params, batch_grid)
                 val_loss += criterion(outputs, functions).item() * params.size(0)
         train_loss /= len(train_dataset); val_loss /= len(val_dataset)
-        if (epoch+1) % 50 == 0:
+        if (epoch+1) % 100 == 0:
             print(f'Epoch {epoch+1}/{epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -355,7 +359,7 @@ for mat_file in mat_files:
     rdc_labels = ['C', 'c', 'K', 'k']
     rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
         
-    n_plot = 8
+    n_plot = 48
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     axes = axes.flatten()  # 2D -> 1D 배열로 변환
 

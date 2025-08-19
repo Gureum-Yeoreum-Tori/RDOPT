@@ -1,0 +1,618 @@
+#%%
+import os
+import torch
+import numpy as np
+import h5py
+import matplotlib.pyplot as plt
+
+import argparse
+import optuna
+from optuna.exceptions import TrialPruned
+
+# from torch.serialization import add_safe_globals
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader, random_split
+from sklearn.preprocessing import StandardScaler
+import neuralop as nop
+from neuralop.models import FNO
+# from neuralop.layers.spectral_convolution import SpectralConv
+
+# add_safe_globals([torch._C._nn.gelu])
+# add_safe_globals([nop.layers.spectral_convolution.SpectralConv])
+
+# 1. Load dataset.mat files
+data_dir = 'dataset/data/tapered_seal'
+# mat_file = '20250812_T_113003' # (K, k, C, c, M, m)
+# mat_file = '20250819_T_123001' # (M, m, C, c, K, k) 왜 다시 뒤집혔지
+# mat_file = '20250819_T_123831'
+# mat_file = '20250819_T_124655'
+
+mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
+mat_files = ('20250819_T_124655',)
+
+# 파라미터 설정
+batch_size = 2**8
+criterion = nop.losses.LpLoss(d=1, p=2)
+epochs = 4000
+param_embedding_dim = 256
+fno_modes = 4
+fno_hidden_channels = 256
+n_layers = 2
+shared_out_channels = fno_hidden_channels
+lr = 1e-4
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+weight_decay=1e-5
+
+import json
+
+hyperparams = {
+    "Batch size": batch_size,
+    "Parameter embedding dimension": param_embedding_dim,
+    "# of FNO modes": fno_modes,
+    "# of FNO hidden channels": fno_hidden_channels,
+    "# of FNO layers": n_layers,
+    "# of shared output channels": shared_out_channels,
+    "Learning rate": f"{lr:.1e}"
+}
+
+print(json.dumps(hyperparams, indent=2))
+
+class ParametricFNO(nn.Module):
+    """
+    기존: 형상 파라미터를 조건으로 받아 함수를 예측하는 FNO 모델 (단일 네트워크)
+    outputs: [B, out_channels, n_vel]
+    """
+    def __init__(self, n_params, param_embedding_dim, fno_modes, fno_hidden_channels, in_channels, out_channels,n_layers):
+        super().__init__()
+        self.n_params = n_params
+        self.param_encoder = nn.Sequential(
+            nn.Linear(n_params, param_embedding_dim),
+            nn.ReLU(),
+            nn.Linear(param_embedding_dim, param_embedding_dim)
+        )
+        self.fno = FNO(
+            n_modes=(fno_modes,),
+            hidden_channels=fno_hidden_channels,
+            n_layers=n_layers,
+            in_channels=in_channels + param_embedding_dim,
+            out_channels=out_channels,
+            # positional_embedding=None,
+            # domain_padding=0.25,
+            # domain_padding_mode='symmetric',
+        )
+
+    def forward(self, params, grid):
+        # params: [B, n_params], grid: [B, n_vel, 1]
+        pe = self.param_encoder(params)                      # [B, emb]
+        pe = pe.unsqueeze(1).repeat(1, grid.shape[1], 1)    # [B, n_vel, emb]
+        fno_in = torch.cat([grid, pe], dim=-1).permute(0, 2, 1)  # [B, 1+emb, n_vel]
+        out = self.fno(fno_in)  # [B, out_channels, n_vel]
+        return out
+    
+class MultiHeadParametricFNO(nn.Module):
+    """
+    FNO 본체는 공유하고, 채널별 1x1 Conv1d 헤드를 분리하는 멀티헤드 구조.
+    outputs: [B, n_heads(=n_rdc_coeffs), n_vel]
+    """
+    def __init__(self, n_params, param_embedding_dim, fno_modes, fno_hidden_channels, in_channels, n_heads,n_layers, shared_out_channels):
+        super().__init__()
+        self.n_params = n_params
+        self.param_encoder = nn.Sequential(
+            nn.Linear(n_params, param_embedding_dim),
+            nn.ReLU(),
+            nn.Linear(param_embedding_dim, param_embedding_dim)
+        )
+        self.trunk = FNO(
+            n_modes=(fno_modes,),
+            hidden_channels=fno_hidden_channels,
+            n_layers=n_layers,
+            in_channels=in_channels + param_embedding_dim,
+            out_channels=shared_out_channels,
+            # positional_embedding=None,
+            # domain_padding=0.25,
+            # domain_padding_mode='symmetric',
+        )
+        
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv1d(shared_out_channels, shared_out_channels, 1),
+                nn.GELU(),
+                nn.Identity(),
+                nn.Dropout(0.05),
+                # depth 2
+                # nn.Conv1d(shared_out_channels, shared_out_channels // 2, 1),
+                nn.Conv1d(shared_out_channels, shared_out_channels, 1),
+                nn.GELU(),
+                nn.Identity(),
+                nn.Dropout(0.05),
+                # output
+                # nn.Conv1d(shared_out_channels // 2, 1, 1)
+                nn.Conv1d(shared_out_channels, 1, 1)
+            ) for _ in range(n_heads)
+        ])
+
+    def forward(self, params, grid):
+        pe = self.param_encoder(params)                       # [B, emb]
+        pe = pe.unsqueeze(1).repeat(1, grid.shape[1], 1)     # [B, n_vel, emb]
+        x = torch.cat([grid, pe], dim=-1).permute(0, 2, 1)   # [B, 1+emb, n_vel]
+        feat = self.trunk(x)                                  # [B, Csh, n_vel]
+        outs = [head(feat) for head in self.heads]            # each: [B,1,n_vel]
+        return torch.cat(outs, dim=1)                         # [B, n_heads, n_vel]
+
+
+# --- Optuna/BO: Single trial training function ---
+def train_eval_one_trial(mat_dir, mat_file, trial=None):
+    """
+    Train once on a single mat_file and return best validation loss.
+    If `trial` is provided (Optuna), sample hyperparameters from `trial`
+    and report/prune per epoch.
+    """
+    # ------------------------
+    # 0) Hyperparameters
+    # ------------------------
+    if trial is None:
+        # Defaults (original script values)
+        hp = {
+            "batch_size": 2**8,
+            "param_embedding_dim": 256,
+            "fno_modes": 4,
+            "fno_hidden_channels": 256,
+            "n_layers": 2,
+            "shared_out_channels": 256,
+            "lr": 1e-4,
+            "weight_decay": 1e-5,
+            "epochs": 4000
+        }
+    else:
+        # Optuna search space
+        hp = {
+            "batch_size": 2 ** trial.suggest_int("log2_batch", 6, 9),                         # 64~512
+            "param_embedding_dim": trial.suggest_categorical("emb_dim", [32, 64, 128, 256, 384]),
+            "fno_modes": trial.suggest_int("fno_modes", 2, 8),
+            "fno_hidden_channels": trial.suggest_categorical("hidden", [24,48,96, 128, 192, 256, 320, 384]),
+            "n_layers": trial.suggest_int("n_layers", 2, 4),
+            "lr": trial.suggest_float("lr", 1e-5, 3e-3, log=True),
+            "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-3, log=True),
+            # keep trial time reasonable
+            "epochs": 500
+        }
+        hp["shared_out_channels"] = hp["fno_hidden_channels"]
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    criterion = nop.losses.LpLoss(d=1, p=2)
+
+    # Reproducibility
+    torch.backends.cudnn.benchmark = False
+    torch.manual_seed(42); np.random.seed(42)
+
+    # ------------------------
+    # 1) Load dataset
+    # ------------------------
+    mat_path = os.path.join(mat_dir, mat_file, 'dataset.mat')
+    with h5py.File(mat_path, 'r') as mat:
+        input_nond = np.array(mat.get('inputNond'))
+        w_vec = np.array(mat['params/wVec'])
+        rdc = np.array(mat.get('RDC'))
+        # use only C, c, K, k (no mass) as in the active section of the script
+        rdc = rdc[2:6, :, :]
+        n_para, n_data = input_nond.shape
+        _, n_vel = w_vec.shape
+        n_rdc_coeffs = rdc.shape[0]
+        X_params = input_nond.T                                        # [nData, nPara]
+        y_functions = rdc.transpose(2, 0, 1)                           # [nData, nRDC, nVel]
+        w = w_vec.squeeze()
+        w_norm = 2 * (w - w.min()) / (w.max()-w.min()) - 1.0
+        grid = w_norm[:, None]                                         # [nVel, 1]
+
+    # consistent split across trials
+    indices = np.arange(n_data)
+    rs = np.random.RandomState(42)
+    perm = rs.permutation(indices)
+    train_size = int(n_data * 0.7); val_size = int(n_data * 0.15)
+    train_idx = perm[:train_size]
+    val_idx = perm[train_size:train_size+val_size]
+    test_idx = perm[train_size+val_size:]
+
+    scaler_X = StandardScaler().fit(X_params[train_idx])
+    X_scaled = np.empty_like(X_params, dtype=float)
+    X_scaled[train_idx] = scaler_X.transform(X_params[train_idx])
+    X_scaled[val_idx]  = scaler_X.transform(X_params[val_idx])
+    X_scaled[test_idx] = scaler_X.transform(X_params[test_idx])
+
+    scalers_y = [StandardScaler().fit(y_functions[train_idx, i, :].reshape(-1,1))
+                 for i in range(n_rdc_coeffs)]
+
+    y_scaled = np.empty_like(y_functions, dtype=float)
+    for i in range(n_rdc_coeffs):
+        for split_idx in (train_idx, val_idx, test_idx):
+            y_scaled[split_idx, i, :] = scalers_y[i].transform(
+                y_functions[split_idx, i, :].reshape(-1,1)
+            ).reshape(-1, y_functions.shape[-1])
+
+    X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
+    y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
+    grid_tensor = torch.tensor(grid, dtype=torch.float32)
+
+    from torch.utils.data import Subset, DataLoader
+    train_dataset = Subset(TensorDataset(X_tensor, y_tensor), train_idx.tolist())
+    val_dataset   = Subset(TensorDataset(X_tensor, y_tensor), val_idx.tolist())
+
+    train_loader = DataLoader(train_dataset, batch_size=int(hp["batch_size"]), shuffle=True, num_workers=0)
+    val_loader   = DataLoader(val_dataset,   batch_size=int(hp["batch_size"]), shuffle=False, num_workers=0)
+
+    # ------------------------
+    # 2) Build model
+    # ------------------------
+    model = MultiHeadParametricFNO(
+        n_params=n_para,
+        param_embedding_dim=int(hp["param_embedding_dim"]),
+        fno_modes=int(hp["fno_modes"]),
+        fno_hidden_channels=int(hp["fno_hidden_channels"]),
+        in_channels=1,
+        n_heads=n_rdc_coeffs,
+        n_layers=int(hp["n_layers"]),
+        shared_out_channels=int(hp["shared_out_channels"])
+    ).to(device)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(hp["lr"]), weight_decay=float(hp["weight_decay"]))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=int(hp["epochs"]))
+
+    # ------------------------
+    # 3) Train
+    # ------------------------
+    best_val = float('inf')
+    no_improve = 0
+    patience = 80 if (trial is not None) else 200  # mild early stop for BO
+    epochs = int(hp["epochs"])
+
+    for epoch in range(epochs):
+        model.train(); train_loss = 0.0
+        for params, functions in train_loader:
+            params, functions = params.to(device), functions.to(device)
+            batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
+            optimizer.zero_grad()
+            outputs = model(params, batch_grid)
+            loss = criterion(outputs, functions)
+            loss.backward(); optimizer.step()
+            train_loss += loss.item() * params.size(0)
+        train_loss /= len(train_dataset)
+
+        model.eval(); val_loss = 0.0
+        with torch.no_grad():
+            for params, functions in val_loader:
+                params, functions = params.to(device), functions.to(device)
+                batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
+                outputs = model(params, batch_grid)
+                val_loss += criterion(outputs, functions).item() * params.size(0)
+        val_loss /= len(val_dataset)
+
+        if trial is None:
+            if (epoch+1) % 100 == 0:
+                print(f"[{mat_file}] Epoch {epoch+1}/{epochs} | Train {train_loss:.6f} | Val {val_loss:.6f}")
+        else:
+            # report & prune
+            trial.report(val_loss, epoch)
+            if trial.should_prune():
+                raise TrialPruned()
+
+        if val_loss + 1e-12 < best_val:
+            best_val = val_loss
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                break
+        scheduler.step()
+
+    return best_val
+
+def main_train():
+    for mat_file in mat_files:
+        mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
+
+        print('current file: '+mat_file)
+        
+        base_dir = 'net'
+        os.makedirs(base_dir, exist_ok=True)
+        model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead_'+mat_file+'_3'+'.pth')
+        network_path = os.path.join(base_dir, 'fno_multihead_'+mat_file+'_3'+'.pth')
+        network_path_ts = os.path.join(base_dir, 'fno_multihead_'+mat_file+'_3'+'.pt')
+
+        # 데이터 로딩 및 전처리
+        with h5py.File(mat_path, 'r') as mat:
+            # inputNond: [nPara, nData] 형상 파라미터
+            input_nond = np.array(mat.get('inputNond'))
+            # wVec: [1, nVel] 회전 속도 벡터 (좌표 그리드)
+            w_vec = np.array(mat['params/wVec'])
+            # RDC: [6, nVel, nData] 동특성 계수 (타겟 함수)
+            rdc = np.array(mat.get('RDC'))
+            rdc = rdc[2:6,:,:] # no mass
+            # rdc = rdc[2:4,:,:] # no mass
+            # rdc = rdc[2:3,:,:] # no mass
+
+            n_para, n_data = input_nond.shape
+            _, n_vel = w_vec.shape
+            n_rdc_coeffs = rdc.shape[0] # 6 
+
+            # 입력 데이터 (X): 형상 파라미터 [nData, nPara]
+            X_params = input_nond.T
+
+            # 출력 데이터 (y): 동특성 계수 함수 [nData, nVel, nRDC]
+            # FNO는 (batch, channels, grid_points) 형태를 선호하므로 [nData, nRDC, nVel]로 변경이라고 GPT가 그럔다
+            y_functions = rdc.transpose(2, 0, 1) # [nData, nRDC, nVel]
+
+            # 회전 속도 그리드: [nVel, 1]
+            
+            w = w_vec.squeeze()                         # [n_vel]
+            w_norm = 2 * (w - w.min()) / (w.max()-w.min()) - 1.0 # normalization
+            grid = w_norm[:, None] # [nVel, 1]
+            # grid = w[:, None] # [nVel, 1]
+
+        indices = np.arange(n_data)
+        train_size = int(n_data*0.7); val_size = int(n_data*0.15)
+        test_size = n_data - train_size - val_size
+        train_idx, val_idx, test_idx = np.split(np.random.permutation(indices),
+                                                [train_size, train_size+val_size])
+
+        scaler_X = StandardScaler().fit(X_params[train_idx])
+        X_scaled = np.empty_like(X_params, dtype=float)
+        X_scaled[train_idx] = scaler_X.transform(X_params[train_idx])
+        X_scaled[val_idx]  = scaler_X.transform(X_params[val_idx])
+        X_scaled[test_idx] = scaler_X.transform(X_params[test_idx])
+
+        scalers_y = [StandardScaler().fit(y_functions[train_idx, i, :].reshape(-1,1))
+                    for i in range(n_rdc_coeffs)]
+
+        y_scaled = np.empty_like(y_functions, dtype=float)
+        for i in range(n_rdc_coeffs):
+            for split_idx in (train_idx, val_idx, test_idx):
+                y_scaled[split_idx, i, :] = scalers_y[i].transform(
+                    y_functions[split_idx, i, :].reshape(-1,1)
+                ).reshape(-1, y_functions.shape[-1])
+
+        # Torch 텐서로 변환
+        X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
+        y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
+        # y_tensor = torch.tensor(y_scaled, dtype=torch.float32).unsqueeze(1)
+        grid_tensor = torch.tensor(grid, dtype=torch.float32)
+
+        # 데이터셋 및 데이터로더 생성
+        dataset = TensorDataset(X_tensor, y_tensor)
+
+        dataset_size = len(dataset)
+        train_size = int(dataset_size * 0.7)
+        val_size = int(dataset_size * 0.15)
+        test_size = dataset_size - train_size - val_size
+
+        from torch.utils.data import Subset
+        train_dataset = Subset(dataset, train_idx.tolist())
+        val_dataset   = Subset(dataset, val_idx.tolist())
+        test_dataset  = Subset(dataset, test_idx.tolist())
+
+        print(f"Training set size: {len(train_dataset)}")
+        print(f"Validation set size: {len(val_dataset)}")
+        print(f"Test set size: {len(test_dataset)}")
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        optimizer = None
+        best_val_loss = float('inf')
+
+        model = MultiHeadParametricFNO(
+            n_params=n_para,
+            param_embedding_dim=param_embedding_dim,
+            fno_modes=fno_modes,
+            fno_hidden_channels=fno_hidden_channels,
+            in_channels=1,
+            n_heads=n_rdc_coeffs,
+            n_layers=n_layers,
+            shared_out_channels=shared_out_channels
+        ).to(device)
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+        # model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead.pth')
+
+        for epoch in range(epochs):
+            model.train(); train_loss = 0.0
+            for params, functions in train_loader:
+                params, functions = params.to(device), functions.to(device)
+                batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
+                optimizer.zero_grad()
+                outputs = model(params, batch_grid)
+                loss = criterion(outputs, functions)
+                loss.backward(); optimizer.step()
+                train_loss += loss.item() * params.size(0)
+            model.eval(); val_loss = 0.0
+            with torch.no_grad():
+                for params, functions in val_loader:
+                    params, functions = params.to(device), functions.to(device)
+                    batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
+                    outputs = model(params, batch_grid)
+                    val_loss += criterion(outputs, functions).item() * params.size(0)
+            train_loss /= len(train_dataset); val_loss /= len(val_dataset)
+            if (epoch+1) % 100 == 0:
+                print(f'Epoch {epoch+1}/{epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                torch.save({'state_dict': model.state_dict()}, model_save_path)
+            scheduler.step()
+        
+        # 저장
+        ckpt = {
+            "state_dict": model.state_dict(),
+            "hparams": {
+                "param_embedding_dim": param_embedding_dim,
+                "fno_modes": fno_modes,
+                "fno_hidden_channels": fno_hidden_channels,
+                "n_layers": n_layers,
+                "shared_out_channels": shared_out_channels,
+                "n_params": n_para,
+                "n_heads": n_rdc_coeffs,
+            },
+            # 전처리 스케일러도 같이 저장하면 편함
+            "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
+            "scalers_y_mean": [s.mean_.ravel() for s in scalers_y],
+            "scalers_y_std":  [s.scale_.ravel() for s in scalers_y],
+        }
+        torch.save(ckpt, network_path)
+
+        # --- Evaluate ---
+        model.eval() # 모델을 추론 모드로 바꿈
+
+        n_test_samples = len(test_dataset.indices)
+        test_params = X_tensor[test_dataset.indices].to(device)
+        grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
+
+        with torch.no_grad(): # 예측하는 부분인듯
+            preds_scaled = model(test_params, grid_repeated).cpu().numpy()
+            targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
+
+        preds_tmp, targets_tmp = [], []
+        for i in range(n_rdc_coeffs):
+            preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
+            targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
+
+        preds_orig   = np.stack(preds_tmp,   axis=1)
+        targets_orig = np.stack(targets_tmp, axis=1)
+
+        # 샘플 시각화
+        import matplotlib.colors as mcolors
+        mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+            
+        rdc_labels = ['C', 'c', 'K', 'k']
+        rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
+            
+        n_plot = 48
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        axes = axes.flatten()  # 2D -> 1D 배열로 변환
+
+        for j in range(n_rdc_coeffs):
+            ax = axes[j]
+            for idx in range(n_plot):
+                color = mcolors_list[idx % len(mcolors_list)]
+                ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
+                        label=f"True, #{test_dataset.indices[idx]}")
+                ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
+                        label=f"Pred, #{test_dataset.indices[idx]}")
+            ax.set_xlabel('Rotational speed [rad/s]')
+            ax.set_ylabel(f"{rdc_units[j]}")
+            ax.set_title(f"{rdc_labels[j]}")
+            ax.grid(True)
+            # ax.legend()
+
+        plt.tight_layout(rect=(0, 0.03, 1, 0.96))
+        plt.show()
+
+        from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+        for coeff_idx, label in enumerate(rdc_labels):
+            y_true = np.ravel(targets_orig[:, coeff_idx, :])
+            y_pred = np.ravel(preds_orig[:, coeff_idx, :])
+
+            mse = mean_squared_error(y_true, y_pred)
+            rmse = np.sqrt(mse)
+            mae = mean_absolute_error(y_true, y_pred)
+            r2 = r2_score(y_true, y_pred)
+            yrng = (y_true.max() - y_true.min())
+            rrmse = rmse / (yrng + 1e-12)
+            mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
+
+            print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+                f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+
+        # 전체 지표
+        y_true_all = np.ravel(targets_orig)
+        y_pred_all = np.ravel(preds_orig)
+        mse = mean_squared_error(y_true_all, y_pred_all)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(y_true_all, y_pred_all)
+        r2 = r2_score(y_true_all, y_pred_all)
+        yrng = (y_true_all.max() - y_true_all.min())
+        rrmse = rmse / (yrng + 1e-12)
+        mape = np.mean(np.abs((y_true_all - y_pred_all) / (np.abs(y_true_all) + 1e-12)))
+
+        print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+            f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+
+        import time
+
+        test_params = X_tensor[test_dataset.indices].to(device)
+        test_targets = y_tensor[test_dataset.indices].to(device)
+        grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
+
+        # 예측 시간 측정
+        with torch.no_grad():
+            torch.cuda.synchronize()  # GPU 시간 측정 전 동기화
+            start_time = time.time()
+
+            preds_scaled = model(test_params, grid_repeated)
+
+            torch.cuda.synchronize()
+            end_time = time.time()
+
+        print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
+        print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
+
+        model = MultiHeadParametricFNO(
+            n_params=n_para,
+            param_embedding_dim=param_embedding_dim,
+            fno_modes=fno_modes,
+            fno_hidden_channels=fno_hidden_channels,
+            in_channels=1,
+            n_heads=n_rdc_coeffs,
+            n_layers=n_layers,
+            shared_out_channels=shared_out_channels
+        ).to("cpu")
+        ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
+        sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
+        model.load_state_dict(sd, strict=False)
+        model.eval().to("cpu")
+
+        # --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
+        L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
+        dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
+        dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
+
+        # ts = torch.jit.trace(model, (dummy_params, dummy_grid))
+
+        with torch.no_grad():
+            ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
+
+        ts.save(network_path_ts)
+
+
+# --- Main entry: CLI for Optuna or legacy training ---
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--optuna", action="store_true", help="Run Bayesian optimization (Optuna)")
+    parser.add_argument("--n-trials", type=int, default=30, help="Number of Optuna trials")
+    parser.add_argument("--study-name", type=str, default="fno_seal_bo", help="Optuna study name")
+    parser.add_argument("--storage", type=str, default=None, help="e.g., sqlite:///optuna_fno.db")
+    parser.add_argument("--mat-file", type=str, default="20250819_T_124655", help="Which dataset folder to optimize on")
+    args = parser.parse_args()
+
+    if args.optuna:
+        # Configure sampler/pruner
+        sampler = optuna.samplers.TPESampler(seed=42, multivariate=True, group=True)
+        pruner = optuna.pruners.MedianPruner(n_warmup_steps=10)
+        study = optuna.create_study(direction="minimize",
+                                    study_name=args.study_name,
+                                    storage=args.storage,
+                                    load_if_exists=True,
+                                    sampler=sampler,
+                                    pruner=pruner)
+
+        def objective(trial):
+            return train_eval_one_trial(data_dir, args.mat_file, trial=trial)
+
+        print(f"Running Optuna on dataset '{args.mat_file}' for {args.n_trials} trials...")
+        study.optimize(objective, n_trials=args.n_trials, gc_after_trial=True)
+        print("Best trial:", study.best_trial.number)
+        print("Best value (Val L2):", study.best_value)
+        print("Best params:", study.best_params)
+    else:
+        main_train()
