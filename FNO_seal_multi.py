@@ -25,15 +25,15 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_file = '20250819_T_124655'
 
 mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
-mat_files = ('20250819_T_124655',)
+# mat_files = ('20250819_T_124655',)
 
 # 파라미터 설정
 batch_size = 2**9
 criterion = nop.losses.LpLoss(d=1, p=2)
-epochs = 2000
+epochs = 3000
 param_embedding_dim = 128
-fno_modes = 8
-fno_hidden_channels = 128
+fno_modes = 32
+fno_hidden_channels = 256
 n_layers = 6
 shared_out_channels = fno_hidden_channels
 lr = 1e-3
@@ -73,7 +73,10 @@ class ParametricFNO(nn.Module):
             hidden_channels=fno_hidden_channels,
             n_layers=n_layers,
             in_channels=in_channels + param_embedding_dim,
-            out_channels=out_channels
+            out_channels=out_channels,
+            # positional_embedding=None,
+            # domain_padding=0.25,
+            # domain_padding_mode='symmetric',
         )
 
     def forward(self, params, grid):
@@ -102,19 +105,22 @@ class MultiHeadParametricFNO(nn.Module):
             hidden_channels=fno_hidden_channels,
             n_layers=n_layers,
             in_channels=in_channels + param_embedding_dim,
-            out_channels=shared_out_channels
+            out_channels=shared_out_channels,
+            # positional_embedding=None,
+            # domain_padding=0.25,
+            # domain_padding_mode='symmetric',
         )
         
         self.heads = nn.ModuleList([
             nn.Sequential(
                 nn.Conv1d(shared_out_channels, shared_out_channels, 1),
                 nn.GELU(),
-                nn.BatchNorm1d(shared_out_channels),
+                nn.Identity(),
                 nn.Dropout(0.1),
                 # depth 2
                 nn.Conv1d(shared_out_channels, shared_out_channels // 2, 1),
                 nn.GELU(),
-                nn.BatchNorm1d(shared_out_channels // 2),
+                nn.Identity(),
                 nn.Dropout(0.1),
                 # output
                 nn.Conv1d(shared_out_channels // 2, 1, 1)
@@ -148,6 +154,7 @@ for mat_file in mat_files:
         w_vec = np.array(mat['params/wVec'])
         # RDC: [6, nVel, nData] 동특성 계수 (타겟 함수)
         rdc = np.array(mat.get('RDC'))
+        rdc = rdc[2:6,:,:] # no mass
 
         n_para, n_data = input_nond.shape
         _, n_vel = w_vec.shape
@@ -165,6 +172,7 @@ for mat_file in mat_files:
         w = w_vec.squeeze()                         # [n_vel]
         w_norm = 2 * (w - w.min()) / (w.max()-w.min()) - 1.0 # normalization
         grid = w_norm[:, None] # [nVel, 1]
+        # grid = w[:, None] # [nVel, 1]
 
     indices = np.arange(n_data)
     train_size = int(n_data*0.7); val_size = int(n_data*0.15)
@@ -202,7 +210,10 @@ for mat_file in mat_files:
     val_size = int(dataset_size * 0.15)
     test_size = dataset_size - train_size - val_size
 
-    train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+    from torch.utils.data import Subset
+    train_dataset = Subset(dataset, train_idx.tolist())
+    val_dataset   = Subset(dataset, val_idx.tolist())
+    test_dataset  = Subset(dataset, test_idx.tolist())
 
     print(f"Training set size: {len(train_dataset)}")
     print(f"Validation set size: {len(val_dataset)}")
@@ -294,16 +305,58 @@ for mat_file in mat_files:
     targets_orig = np.stack(targets_tmp, axis=1)
 
     # 샘플 시각화
-    import matplotlib.colors as mcolors
-    mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
-    # mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
-    # rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
-    # rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
-    rdc_labels = ['M', 'm', 'C', 'c', 'K', 'k']
-    rdc_units = ['kg', 'kg','N s/m', 'N s/m', 'N/m', 'N/m']
+    # import matplotlib.colors as mcolors
+    # mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+    # # mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
+    # # rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
+    # # rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
+    # rdc_labels = ['M', 'm', 'C', 'c', 'K', 'k']
+    # rdc_units = ['kg', 'kg','N s/m', 'N s/m', 'N/m', 'N/m']
+        
+    # n_plot = 8
+    # fig, axes = plt.subplots(3, 2, figsize=(14, 10))
+    # axes = axes.flatten()  # 2D -> 1D 배열로 변환
+
+    # for j in range(n_rdc_coeffs):
+    #     ax = axes[j]
+    #     for idx in range(n_plot):
+    #         color = mcolors_list[idx % len(mcolors_list)]
+    #         ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
+    #                 label=f"True, #{test_dataset.indices[idx]}")
+    #         ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
+    #                 label=f"Pred, #{test_dataset.indices[idx]}")
+    #     ax.set_xlabel('Rotational speed [rad/s]')
+    #     ax.set_ylabel(f"{rdc_units[j]}")
+    #     ax.set_title(f"{rdc_labels[j]}")
+    #     ax.grid(True)
+    #     # ax.legend()
+
+    # plt.tight_layout(rect=(0, 0.03, 1, 0.96))
+    # plt.show()
+
+    # from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+    # for coeff_idx, label in enumerate(rdc_labels):
+    #     y_true = np.ravel(targets_orig[:, coeff_idx, :])
+    #     y_pred = np.ravel(preds_orig[:, coeff_idx, :])
+
+    #     mse = mean_squared_error(y_true, y_pred)
+    #     rmse = np.sqrt(mse)
+    #     mae = mean_absolute_error(y_true, y_pred)
+    #     r2 = r2_score(y_true, y_pred)
+    #     yrng = (y_true.max() - y_true.min())
+    #     rrmse = rmse / (yrng + 1e-12)
+    #     mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
+
+    #     print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+    #         f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+        
+        
+    rdc_labels = ['C', 'c', 'K', 'k']
+    rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
         
     n_plot = 8
-    fig, axes = plt.subplots(3, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     axes = axes.flatten()  # 2D -> 1D 배열로 변환
 
     for j in range(n_rdc_coeffs):
@@ -679,7 +732,7 @@ for mat_file in mat_files:
 # rdc_labels = ['M', 'm', 'C', 'c', 'K', 'k']
 # rdc_units = ['kg', 'kg','N s/m', 'N s/m', 'N/m', 'N/m']
     
-# n_plot = 8
+# n_plot = 18
 # fig, axes = plt.subplots(3, 2, figsize=(14, 10))
 # axes = axes.flatten()  # 2D -> 1D 배열로 변환
 
@@ -792,3 +845,4 @@ for mat_file in mat_files:
 #     ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
 
 # ts.save(network_path_ts)
+# %%
