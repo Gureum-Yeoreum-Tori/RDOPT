@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 from scipy.interpolate import PPoly
 
-h5_file = "dataset/nondBrg.h5"
+h5_file = "dataset/data/nondBrg.h5"
 
 with h5py.File(h5_file, "r") as f:
     # 상위 그룹들 (brg_1, brg_2, ...)

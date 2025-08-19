@@ -30,17 +30,18 @@ normalLoad = calculate_bearing_loads(
     n_brg=n_brg,
 )
 
-## optimization condition
+## optimization parameters
 
-paretoRatio = 0.4;
-plottt = {'gaplotpareto','gaplotstopping','gaplotrankhist','gaplotspread'};
+input_brg = [1, 1, 10, 10]
+# paretoRatio = 0.4;
+# plottt = {'gaplotpareto','gaplotstopping','gaplotrankhist','gaplotspread'};
 
-nVarBrg = 2*nBrg; % [Brg#1 Cr1/Db*10000 Brg#2 Cr2/Db*10000]
-% intconBrg = 1:2*nBrg;
-lbBrg = [1 1 5 5]; 
-ubBrg = [55 55 20 20];
+# nVarBrg = 2*nBrg; % [Brg#1 Cr1/Db*10000 Brg#2 Cr2/Db*10000]
+# % intconBrg = 1:2*nBrg;
+# lbBrg = [1 1 5 5]; 
+# ubBrg = [55 55 20 20];
 
-nVarSeal = 3*nSeal; % [hIn* hOut*1000 psr*10]
-% intconSeal = 1:3*nSeal;
-lbSeal = [20 20 0]; 
-ubSeal = [50 50 10];
+# nVarSeal = 3*nSeal; % [hIn* hOut*1000 psr*10]
+# % intconSeal = 1:3*nSeal;
+# lbSeal = [20 20 0]; 
+# ubSeal = [50 50 10];
