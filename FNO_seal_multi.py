@@ -19,14 +19,28 @@ from neuralop.models import FNO
 
 # 1. Load dataset.mat files
 data_dir = 'dataset/data/tapered_seal'
-mat_file = os.path.join(data_dir, '20250812_T_113003', 'dataset.mat')
+# mat_file = '20250812_T_113003' # (K, k, C, c, M, m)
+mat_file = '20250819_T_123001' # (M, m, C, c, K, k) 왜 다시 뒤집혔지
+# mat_file = '20250819_T_123831'
+# mat_file = '20250819_T_124655'
+mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
+
+base_dir = 'net'
+os.makedirs(base_dir, exist_ok=True)
+model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead_'+mat_file+'.pth')
+network_path = os.path.join(base_dir, 'fno_multihead_'+mat_file+'.pth')
+network_path_ts = os.path.join(base_dir, 'fno_multihead_'+mat_file+'.pt')
 
 # 파라미터 설정
-batch_size = 2**10
+batch_size = 2**8
 criterion = nop.losses.LpLoss(d=1, p=2)
 epochs = 2000
 param_embedding_dim = 64
+<<<<<<< HEAD
 fno_modes = 8
+=======
+fno_modes = 16
+>>>>>>> be005a2 (집에 가고 싶다)
 fno_hidden_channels = 64
 n_layers = 6
 shared_out_channels = fno_hidden_channels
@@ -50,7 +64,7 @@ hyperparams = {
 print(json.dumps(hyperparams, indent=2))
 
 # 데이터 로딩 및 전처리
-with h5py.File(mat_file, 'r') as mat:
+with h5py.File(mat_path, 'r') as mat:
     # inputNond: [nPara, nData] 형상 파라미터
     input_nond = np.array(mat.get('inputNond'))
     # wVec: [1, nVel] 회전 속도 벡터 (좌표 그리드)
@@ -60,7 +74,7 @@ with h5py.File(mat_file, 'r') as mat:
 
     n_para, n_data = input_nond.shape
     _, n_vel = w_vec.shape
-    n_rdc_coeffs = rdc.shape[0] # 6 (K, k, C, c, M, m)
+    n_rdc_coeffs = rdc.shape[0] # 6 
 
     # 입력 데이터 (X): 형상 파라미터 [nData, nPara]
     X_params = input_nond.T
@@ -77,23 +91,6 @@ with h5py.File(mat_file, 'r') as mat:
 
 
 # %%
-# # 데이터 스케일링
-# scaler_X = StandardScaler()
-# X_scaled = scaler_X.fit_transform(X_params) 
-
-# scalers_y = [StandardScaler() for _ in range(n_rdc_coeffs)]
-# y_scaled_channels = []
-# for i in range(n_rdc_coeffs):
-#     # 각 채널(RDC)의 데이터를 [n_data * n_vel, 1] 형태로 만들어 스케일러에 적용
-#     channel_data = y_functions[:, i, :].reshape(-1, 1)
-#     scaled_channel_data = scalers_y[i].fit_transform(channel_data)
-#     # 원래 형태 [n_data, n_vel]로 복원
-#     y_scaled_channels.append(scaled_channel_data.reshape(n_data, n_vel))
-
-# # 스케일링된 채널들을 다시 [n_data, n_rdc_coeffs, n_vel]
-# y_scaled = np.stack(y_scaled_channels, axis=1)
-
-
 indices = np.arange(n_data)
 train_size = int(n_data*0.7); val_size = int(n_data*0.15)
 test_size = n_data - train_size - val_size
@@ -216,8 +213,7 @@ class MultiHeadParametricFNO(nn.Module):
 
 optimizer = None
 best_val_loss = float('inf')
-base_dir = 'net'
-os.makedirs(base_dir, exist_ok=True)
+
 
 #%%
 
@@ -262,7 +258,6 @@ for epoch in range(epochs):
     scheduler.step()
     
 #%%
-network_path = os.path.join(base_dir, "fno_multihead.pth")
 # 저장
 ckpt = {
     "state_dict": model.state_dict(),
@@ -281,53 +276,6 @@ ckpt = {
     "scalers_y_std":  [s.scale_.ravel() for s in scalers_y],
 }
 torch.save(ckpt, network_path)
-
-#%%
-# # 매트랩에서 쓸 수 있게 ONNX로 저장
-
-# L = grid_tensor.shape[0]                     # 학습 때 n_vel
-# dummy_params = torch.zeros(1, X_tensor.shape[1])   # [1, n_params]
-# dummy_grid   = torch.zeros(1, L, grid_tensor.shape[1]) # [1, L, Cg]
-# onnx_path = os.path.join(base_dir, "fno_multihead.onnx")
-
-# bad = [(k, type(v)) for k, v in model.state_dict().items() if not torch.is_tensor(v)]
-# print("Non-tensor entries in state_dict:", bad)
-
-# # 동적 길이/배치 허용 (batch, length)
-# dynamic_axes = {
-#     "params": {0: "batch"}, 
-#     "grid": {0: "batch", 1: "length"}, 
-#     "output": {0: "batch", 2: "length"}
-# }
-
-
-# torch.onnx.export(
-#     model.eval(),
-#     (dummy_params, dummy_grid),
-#     onnx_path,
-#     input_names=['params', 'grid'], 
-#     output_names=['output'],
-#     dynamic_axes=dynamic_axes, 
-#     opset_version=17, 
-#     do_constant_folding=True, 
-#     dynamo=True
-# )
-
-# print("saved:", onnx_path)
-
-# import numpy as np, scipy.io as sio
-# scaler_path = os.path.join(base_dir, "rdopt_scalers_multi.mat")
-
-# scalerX_mean = scaler_X.mean_
-# scalerX_std  = scaler_X.scale_
-# scalersY_mean = np.stack([s.mean_.reshape(-1) for s in scalers_y])   # [6, 1]
-# scalersY_std  = np.stack([s.scale_.reshape(-1) for s in scalers_y])  # [6, 1]
-# sio.savemat(scaler_path, dict(
-#     scalerX_mean=scalerX_mean, scalerX_std=scalerX_std,
-#     scalersY_mean=scalersY_mean, scalersY_std=scalersY_std
-# ))
-
-
 
 #%%
 # --- Evaluate ---
@@ -354,10 +302,12 @@ targets_orig = np.stack(targets_tmp, axis=1)
 import matplotlib.colors as mcolors
 mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
 # mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
-rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
-rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
+# rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
+# rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
+rdc_labels = ['M', 'm', 'C', 'c', 'K', 'k']
+rdc_units = ['kg', 'kg','N s/m', 'N s/m', 'N/m', 'N/m']
     
-n_plot = 5
+n_plot = 8
 fig, axes = plt.subplots(3, 2, figsize=(14, 10))
 axes = axes.flatten()  # 2D -> 1D 배열로 변환
 
@@ -373,7 +323,7 @@ for j in range(n_rdc_coeffs):
     ax.set_ylabel(f"{rdc_units[j]}")
     ax.set_title(f"{rdc_labels[j]}")
     ax.grid(True)
-    ax.legend()
+    # ax.legend()
 
 plt.tight_layout(rect=(0, 0.03, 1, 0.96))
 plt.show()
@@ -392,6 +342,7 @@ plt.show()
 #     plt.title(f"{rdc_labels[j]}")
 #     plt.tight_layout(rect=(0, 0.03, 1, 0.96)); plt.show()
 
+#%%
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 for coeff_idx, label in enumerate(rdc_labels):
@@ -468,5 +419,4 @@ dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [
 with torch.no_grad():
     ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
 
-network_path = os.path.join(base_dir, "fno_multihead_ts.pt")
-ts.save(network_path)
+ts.save(network_path_ts)
