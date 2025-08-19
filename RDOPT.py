@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from ng_import_data import rotor_import, calculate_bearing_loads
+from script.import_data import rotor_import, calculate_bearing_loads
 
 ## Import data
 data_dir = 'dataset'

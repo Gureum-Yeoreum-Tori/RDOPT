@@ -9,7 +9,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 import itertools
 
 # 컨텍스트에 제공된 관련 모듈 임포트
-from ng_seal_solver import main_seal_solver
+from script.seal_solver import main_seal_solver
 from neuralop.models import FNO
 
 
