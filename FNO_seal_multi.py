@@ -25,21 +25,21 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_file = '20250819_T_124655'
 
 mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
-# mat_files = ('20250819_T_124655',)
+mat_files = ('20250819_T_124655',)
 
 # 파라미터 설정
-batch_size = 2**9
+batch_size = 2**8
 criterion = nop.losses.LpLoss(d=1, p=2)
-epochs = 3000
+epochs = 4000
 param_embedding_dim = 128
-fno_modes = 32
+fno_modes = 4
 fno_hidden_channels = 256
-n_layers = 6
+n_layers = 2
 shared_out_channels = fno_hidden_channels
-lr = 1e-3
+lr = 1e-5
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
-weight_decay=1e-4
+weight_decay=1e-5
 
 import json
 
@@ -305,8 +305,8 @@ for mat_file in mat_files:
     targets_orig = np.stack(targets_tmp, axis=1)
 
     # 샘플 시각화
-    # import matplotlib.colors as mcolors
-    # mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+    import matplotlib.colors as mcolors
+    mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
     # # mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
     # # rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
     # # rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
