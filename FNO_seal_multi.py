@@ -32,17 +32,13 @@ network_path = os.path.join(base_dir, 'fno_multihead_'+mat_file+'.pth')
 network_path_ts = os.path.join(base_dir, 'fno_multihead_'+mat_file+'.pt')
 
 # 파라미터 설정
-batch_size = 2**8
+batch_size = 2**10
 criterion = nop.losses.LpLoss(d=1, p=2)
 epochs = 2000
-param_embedding_dim = 64
-<<<<<<< HEAD
+param_embedding_dim = 128
 fno_modes = 8
-=======
-fno_modes = 16
->>>>>>> be005a2 (집에 가고 싶다)
-fno_hidden_channels = 64
-n_layers = 6
+fno_hidden_channels = 128
+n_layers = 4
 shared_out_channels = fno_hidden_channels
 lr = 1e-3
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
