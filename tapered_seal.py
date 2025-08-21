@@ -4,7 +4,7 @@ import itertools
 import time
 import datetime
 from tqdm import tqdm
-from script.seal_solver import main_seal_solver
+from solver_seal import main_seal_solver
 
 wRange = np.array([1500, 5000]) * np.pi / 30
 wOper = np.array([3800, 4200]) * np.pi / 30
