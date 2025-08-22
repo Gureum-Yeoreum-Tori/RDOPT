@@ -2,3 +2,5 @@ script/**               filter=git-crypt diff=git-crypt
 import_data.py          filter=git-crypt diff=git-crypt
 solver_seal.py          filter=git-crypt diff=git-crypt
 solver_rotordyn.py      filter=git-crypt diff=git-crypt
+solver_*.py      filter=git-crypt diff=git-crypt
+loader_*.py      filter=git-crypt diff=git-crypt
