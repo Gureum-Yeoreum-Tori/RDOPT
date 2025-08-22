@@ -9,10 +9,11 @@ import time
 
 # ----------------- 경로/옵션 -----------------
 DATA_DIR   = 'dataset/data/tapered_seal'
-MAT_FILE   = os.path.join(DATA_DIR, '20250812_T_113003', 'dataset.mat')
-CKPT_PATH  = 'net/fno_multihead.pth'        # state_dict 저장본(.pth)
-TS_PATH    = 'net/fno_multihead_ts.pt'          # TorchScript 저장본(.pt)
-USE_TS     = False                           # True: TorchScript 경로, False: state_dict 경로
+# MAT_FILE   = os.path.join(DATA_DIR, '20250812_T_113003', 'dataset.mat')
+MAT_FILE   = os.path.join(DATA_DIR, '20250819_T_123831', 'dataset.mat')
+CKPT_PATH  = 'net/fno_multihead_20250819_T_123831_2.pth'        # state_dict 저장본(.pth)
+TS_PATH    = 'net/fno_multihead_20250819_T_123831_2.pt'          # TorchScript 저장본(.pt)
+USE_TS     = True                           # True: TorchScript 경로, False: state_dict 경로
 DEVICE     = 'cuda' if torch.cuda.is_available() else 'cpu'
 n_plot = 3
 # ----------------- 유틸 -----------------
