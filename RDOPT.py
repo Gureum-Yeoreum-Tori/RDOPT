@@ -90,13 +90,24 @@ for i in range(len(brgs)):
                         ], axis=1)
 
 
+groups = defaultdict(list)          # {SealNet: [원본 인덱스,...]}
+for i, s in enumerate(seals):
+    groups[s.SealNet].append(i)
+outputs = [None] * len(seals)  # 원래 순서로 채울 버퍼
+
+n_seal_net = np.zeros(3)
+for idxs in (1, 2, 3):
+    idx = groups[idxs]
+    n_seal_net(idxs) = len(idx)
+
+
 h_in = np.random.randint(100,500,size=n_pop*n_seal)[:, None]
 h_out = np.random.randint(100,500,size=n_pop*n_seal)[:, None]
 psr = np.random.randint(0,10,size=n_pop*n_seal)[:, None]
 
 seal_params = np.concatenate([brg1_id, brg1_cr, brg2_id, brg2_cr], axis=1)
 
-
+np.matlib.repmat(h_in,5,2)
 
 
 
@@ -116,11 +127,6 @@ seal_params = np.concatenate([brg1_id, brg1_cr, brg2_id, brg2_cr], axis=1)
 
 # lb = [100 100 0]; % sealNet data range
 # ub = [500 500 10];
-
-groups = defaultdict(list)          # {SealNet: [원본 인덱스,...]}
-for i, s in enumerate(seals):
-    groups[s.SealNet].append(i)
-outputs = [None] * len(seals)  # 원래 순서로 채울 버퍼
 
 
 
