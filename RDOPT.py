@@ -46,7 +46,73 @@ matrix_params = {
     'n_node': n_node,
     'n_dof': n_dof,
 }
-w_vec = np.linspace(w_range[0], w_range[1], 15)
+
+n_w = 14
+w_vec = np.linspace(w_range[0], w_range[1], n_w)
+
+## predict bearing and seal rdc. single case
+
+brg = BearingH5Loader()
+seal = SealFNOModel()
+
+
+n_pop = 1
+
+brg1_id = np.random.randint(1,55,size=n_pop)[:,None] # bearing_id: 1 ~ 55
+brg2_id = np.random.randint(1,55,size=n_pop)[:,None] 
+brg1_cr = np.random.randint(10,30,size=n_pop)[:,None] # Cr/D = 10/10000 ~ 30/10000
+brg2_cr = np.random.randint(10,30,size=n_pop)[:,None] 
+brg_params = np.concatenate([brg1_id, brg1_cr, brg2_id, brg2_cr], axis=1)
+
+K_brg = np.zeros([n_pop,n_w,4,2])
+C_brg = np.zeros([n_pop,n_w,4,2])
+for i in range(len(brgs)):
+    for j in range(n_pop):
+        K_, C_, _ = brg.calculate_bearing_coefficients(
+            brg_params[j,2*(i-1)].astype(int), 
+            brgs[i].Db, 
+            brgs[i].Db*brg_params[j,2*(i-1)+1]*1e-4, 
+            brgs[i].mu, 
+            brgs[i].load, 
+            w_vec
+        )
+        K_brg[j,:, :, i] = np.stack([
+                            K_[:,0,0],  # Kxx
+                            K_[:,0,1],  # Kxy
+                            K_[:,1,0],  # Kyx
+                            K_[:,1,1],  # Kyy
+                        ], axis=1)
+        C_brg[j,:, :, i] = np.stack([
+                            C_[:,0,0],  # Kxx
+                            C_[:,0,1],  # Kxy
+                            C_[:,1,0],  # Kyx
+                            C_[:,1,1],  # Kyy
+                        ], axis=1)
+
+
+h_in = np.random.randint(100,500,size=n_pop*n_seal)[:, None]
+h_out = np.random.randint(100,500,size=n_pop*n_seal)[:, None]
+psr = np.random.randint(0,10,size=n_pop*n_seal)[:, None]
+
+seal_params = np.concatenate([brg1_id, brg1_cr, brg2_id, brg2_cr], axis=1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # lb = [100 100 0]; % sealNet data range
 # ub = [500 500 10];
@@ -56,39 +122,61 @@ for i, s in enumerate(seals):
     groups[s.SealNet].append(i)
 outputs = [None] * len(seals)  # 원래 순서로 채울 버퍼
 
-seal = SealFNOModel()
 
 
-this_seal = seals[2]
-
-
-h_in = np.random.randint(100,500,size=1)[:, None]
-h_out = np.random.randint(100,500,size=1)[:, None]
-psr = np.random.randint(0,10,size=1)[:, None]
+this_seal = seals[3]
+n_pop = 1200
+h_in = np.random.randint(100,500,size=n_pop)[:, None]
+h_out = np.random.randint(100,500,size=n_pop)[:, None]
+psr = np.random.randint(0,10,size=n_pop)[:, None]
 X = np.concatenate([h_in, h_out, psr], axis=1)
 
-geometry = {
-    'hIn': float(h_in*1e-6),
-    'hOut': float(h_out*1e-6),
-    'Ds': this_seal.Ds,
-    'Ls': this_seal.Ls,
-    'NxSeal': 25
-}
+
 fluid = {
     'mu': this_seal.mu,
     'rho': this_seal.rho,
 }
-op_conditions = {
-    'dp': this_seal.dp,
-    'psr': float(psr*1e-1),
-    'w_vec': w_vec,
-}
+import time
+t_start = time.time()
+for idx in range(n_pop):
+    t1 = time.time()
+    geometry = {
+        'hIn': float(X[idx,0]*1e-6),
+        'hOut': float(X[idx,1]*1e-6),
+        'Ds': this_seal.Ds,
+        'Ls': this_seal.Ls,
+        'NxSeal': 25
+    }
+    op_conditions = {
+        'dp': this_seal.dp,
+        'psr': float(X[idx,2]*1e-1),
+        'w_vec': w_vec,
+    }
 
-_, RDC, _, _, _, _, _ = seal_solver(geometry, fluid, op_conditions)
+    _, RDC, _, _, _, _, _ = seal_solver(geometry, fluid, op_conditions)
+    
+    t2 = time.time()
+    print(t2-t1)
+t_end = time.time()
+elapsed = t_end - t_start
+print(elapsed)
+
 
 RDC_ = RDC[:,2:6]
+t_start = time.time()
 Y = seal.predict(this_seal.SealNet,X,w_vec) # K k C c
-Y2 = Y.squeeze(0).T
+t_end = time.time()
+elapsed = t_end - t_start
+print(elapsed)
+# Y2 = Y.squeeze(0).T
+# err = np.abs(RDC_-Y2)/np.abs(RDC_)*100
+# print(err)
+
+
+
+
+
+
 
 # for idxs in (1, 2, 3):
 #     idx = groups[idxs]
