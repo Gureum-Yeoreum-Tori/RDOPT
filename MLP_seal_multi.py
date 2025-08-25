@@ -1,0 +1,509 @@
+#%%
+import os
+import torch
+import numpy as np
+import h5py
+import matplotlib.pyplot as plt
+
+# from torch.serialization import add_safe_globals
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader, random_split
+from sklearn.preprocessing import StandardScaler
+# from neuralop.layers.spectral_convolution import SpectralConv
+
+# add_safe_globals([torch._C._nn.gelu])
+# add_safe_globals([nop.layers.spectral_convolution.SpectralConv])
+
+# 1. Load dataset.mat files
+data_dir = 'dataset/data/tapered_seal'
+# mat_file = '20250812_T_113003' # (K, k, C, c, M, m)
+# mat_file = '20250819_T_123001' # (M, m, C, c, K, k) 왜 다시 뒤집혔지
+# mat_file = '20250819_T_123831'
+# mat_file = '20250819_T_124655'
+
+# mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
+mat_files = ('20250825_T_120952',)
+# mat_files = ('20250825_T_123550',)
+# mat_files = ('20250825_T_125136',)
+# mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
+
+
+# 파라미터 설정
+# 파라미터 설정
+batch_size = 2**10
+criterion = nn.MSELoss()
+epochs = 5000
+# epochs = 5000
+param_embedding_dim = 2**7
+hidden_channels = 2**7
+n_layers = 6
+shared_out_channels = hidden_channels
+
+lr = 1e-5
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+weight_decay=1e-4
+
+import json
+
+hyperparams = {
+    "Batch size": batch_size,
+    "Parameter embedding dimension": param_embedding_dim,
+    "# of hidden channels": hidden_channels,
+    "# of layers": n_layers,
+    "# of shared output channels": shared_out_channels,
+    "Learning rate": f"{lr:.1e}"
+}
+
+print(json.dumps(hyperparams, indent=2))
+
+class ParametricMLP(nn.Module):
+    """
+    형상 파라미터와 1D grid(회전속도)를 입력으로 받아, 각 grid point별 스칼라 함수를 예측하는 점별(point-wise) MLP.
+    outputs: [B, out_channels, n_vel]
+    """
+    def __init__(self, n_params, param_embedding_dim, hidden_channels, out_channels, n_layers):
+        super().__init__()
+        self.n_params = n_params
+
+        # 파라미터/그리드 인코더
+        self.param_encoder = nn.Sequential(
+            nn.Linear(n_params, param_embedding_dim),
+            nn.GELU(),
+            nn.Linear(param_embedding_dim, param_embedding_dim),
+            nn.GELU(),
+        )
+        self.grid_encoder = nn.Sequential(
+            nn.Linear(1, param_embedding_dim),
+            nn.GELU(),
+        )
+        
+        # point-wise trunk MLP (마지막 차원에 대해 동일 가중치 적용)
+        trunk_layers = []
+        in_dim = 2 * param_embedding_dim
+        for _ in range(max(1, n_layers)):
+            trunk_layers.append(nn.Linear(in_dim, hidden_channels))
+            trunk_layers.append(nn.GELU())
+            trunk_layers.append(nn.Dropout(0.05))
+            in_dim = hidden_channels
+        trunk_layers.append(nn.Linear(in_dim, out_channels))  # shared feature 채널
+        self.trunk = nn.Sequential(*trunk_layers)
+
+    def forward(self, params, grid):
+        # params: [B, n_params], grid: [B, n_vel, 1]
+        B, L, _ = grid.shape
+        pe = self.param_encoder(params)             # [B, emb]
+        ge = self.grid_encoder(grid.view(B * L, 1)) # [B*L, emb]
+        pe = pe.unsqueeze(1).expand(B, L, -1).reshape(B * L, -1)  # [B*L, emb]
+        x  = torch.cat([ge, pe], dim=-1)            # [B*L, 2*emb]
+        feat = self.trunk(x)                        # [B*L, out_channels]
+        feat = feat.view(B, L, -1).permute(0, 2, 1) # [B, out_channels, L]
+        return feat
+    
+class MultiHeadParametricMLP(nn.Module):
+    """
+    FNO 대신 점별(point-wise) MLP trunk + 채널별 1x1 head를 사용.
+    기존 forward/출력 형태와 동일: outputs: [B, n_heads, n_vel]
+    """
+    def __init__(self, n_params, param_embedding_dim, hidden_channels, in_channels, n_heads, n_layers, shared_out_channels):
+        super().__init__()
+        shared_channels = shared_out_channels if shared_out_channels is not None else hidden_channels
+
+        # 파라미터/그리드 인코더
+        self.param_encoder = nn.Sequential(
+            nn.Linear(n_params, param_embedding_dim),
+            nn.GELU(),
+            nn.Linear(param_embedding_dim, param_embedding_dim),
+            nn.GELU(),
+        )
+        self.grid_encoder = nn.Sequential(
+            nn.Linear(1, param_embedding_dim),
+            nn.GELU(),
+        )
+
+        # 공유 trunk (point-wise MLP)
+        trunk_layers = []
+        in_dim = 2 * param_embedding_dim
+        for _ in range(max(1, n_layers)):
+            trunk_layers.append(nn.Linear(in_dim, hidden_channels))
+            trunk_layers.append(nn.GELU())
+            in_dim = hidden_channels
+        trunk_layers.append(nn.Linear(in_dim, shared_channels))
+        trunk_layers.append(nn.GELU())
+        self.trunk = nn.Sequential(*trunk_layers)
+
+        # 헤드: 채널 축으로 1 출력
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(shared_channels, shared_channels),
+                nn.GELU(),
+                nn.Linear(shared_channels, 1),
+            ) for _ in range(n_heads)
+        ])
+
+    def forward(self, params, grid):
+        # params: [B, n_params], grid: [B, n_vel, 1]
+        B, L, _ = grid.shape
+        pe = self.param_encoder(params)                      # [B, emb]
+        ge = self.grid_encoder(grid.view(B * L, 1))          # [B*L, emb]
+        pe = pe.unsqueeze(1).expand(B, L, -1).reshape(B * L, -1)  # [B*L, emb]
+        x = torch.cat([ge, pe], dim=-1)                      # [B*L, 2*emb]
+        feat = self.trunk(x)                                 # [B*L, Csh]
+
+        # 각 head를 적용해 [B, n_heads, L]로 조립
+        outs = []
+        for head in self.heads:
+            y = head(feat)                                   # [B*L, 1]
+            y = y.view(B, L).unsqueeze(1)                    # [B, 1, L]
+            outs.append(y)
+        return torch.cat(outs, dim=1)                        # [B, n_heads, L]
+
+for mat_file in mat_files:
+    mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
+
+    print('current file: '+mat_file)
+    
+    base_dir = 'net'
+    os.makedirs(base_dir, exist_ok=True)
+    model_save_path = os.path.join(base_dir, 'mlp_seal_best_multihead_'+mat_file+'.pth')
+    network_path = os.path.join(base_dir, 'mlp_multihead_'+mat_file+'.pth')
+    network_path_ts = os.path.join(base_dir, 'mlp_multihead_'+mat_file+'.pt')
+
+    # 데이터 로딩 및 전처리
+    with h5py.File(mat_path, 'r') as mat:
+        # inputNond: [nPara, nData] 형상 파라미터
+        input_nond = np.array(mat.get('inputNond'))
+        # wVec: [1, nVel] 회전 속도 벡터 (좌표 그리드)
+        w_vec = np.array(mat['params/wVec'])
+        # RDC: [6, nVel, nData] 동특성 계수 (타겟 함수)
+        rdc = np.array(mat.get('RDC'))
+        rdc = rdc[2:6,:,:] # no mass
+        # rdc = rdc[2:4,:,:] # no mass
+        # rdc = rdc[2:3,:,:] # no mass
+        # rdc = rdc[3,:,:][None,:,:] # no mass
+
+        n_para, n_data = input_nond.shape
+        _, n_vel = w_vec.shape
+        n_rdc_coeffs = rdc.shape[0] # 6 
+
+        # 입력 데이터 (X): 형상 파라미터 [nData, nPara]
+        X_params = input_nond.T
+
+        # 출력 데이터 (y): 동특성 계수 함수 [nData, nVel, nRDC]
+        # FNO는 (batch, channels, grid_points) 형태를 선호하므로 [nData, nRDC, nVel]로 변경이라고 GPT가 그럔다
+        y_functions = rdc.transpose(2, 0, 1) # [nData, nRDC, nVel]
+
+        # 회전 속도 그리드: [nVel, 1]
+        
+        w = w_vec.squeeze()                         # [n_vel]
+        w_norm = 2 * (w - w.min()) / (w.max()-w.min()) - 1.0 # normalization
+        grid = w_norm[:, None] # [nVel, 1]
+        # grid = w[:, None] # [nVel, 1]
+
+    indices = np.arange(n_data)
+    train_size = int(n_data*0.7); val_size = int(n_data*0.15)
+    test_size = n_data - train_size - val_size
+    train_idx, val_idx, test_idx = np.split(np.random.permutation(indices),
+                                            [train_size, train_size+val_size])
+
+    scaler_X = StandardScaler().fit(X_params[train_idx])
+    X_scaled = np.empty_like(X_params, dtype=float)
+    X_scaled[train_idx] = scaler_X.transform(X_params[train_idx])
+    X_scaled[val_idx]  = scaler_X.transform(X_params[val_idx])
+    X_scaled[test_idx] = scaler_X.transform(X_params[test_idx])
+
+    scalers_y = [StandardScaler().fit(y_functions[train_idx, i, :].reshape(-1,1))
+                for i in range(n_rdc_coeffs)]
+
+    y_scaled = np.empty_like(y_functions, dtype=float)
+    for i in range(n_rdc_coeffs):
+        for split_idx in (train_idx, val_idx, test_idx):
+            y_scaled[split_idx, i, :] = scalers_y[i].transform(
+                y_functions[split_idx, i, :].reshape(-1,1)
+            ).reshape(-1, y_functions.shape[-1])
+
+    # Torch 텐서로 변환
+    X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
+    y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
+    # y_tensor = torch.tensor(y_scaled, dtype=torch.float32).unsqueeze(1)
+    grid_tensor = torch.tensor(grid, dtype=torch.float32)
+
+    # 데이터셋 및 데이터로더 생성
+    dataset = TensorDataset(X_tensor, y_tensor)
+
+    dataset_size = len(dataset)
+    train_size = int(dataset_size * 0.7)
+    val_size = int(dataset_size * 0.15)
+    test_size = dataset_size - train_size - val_size
+
+    from torch.utils.data import Subset
+    train_dataset = Subset(dataset, train_idx.tolist())
+    val_dataset   = Subset(dataset, val_idx.tolist())
+    test_dataset  = Subset(dataset, test_idx.tolist())
+
+    print(f"Training set size: {len(train_dataset)}")
+    print(f"Validation set size: {len(val_dataset)}")
+    print(f"Test set size: {len(test_dataset)}")
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    optimizer = None
+    best_val_loss = float('inf')
+
+    model = MultiHeadParametricMLP(
+        n_params=n_para,
+        param_embedding_dim=param_embedding_dim,
+        hidden_channels=hidden_channels,
+        in_channels=1,
+        n_heads=n_rdc_coeffs,
+        n_layers=n_layers,
+        shared_out_channels=shared_out_channels
+    ).to(device)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+    best_val_loss = float('inf')
+    start_epoch = 0
+    ckpt_best_path = os.path.join(base_dir, f'mlp_seal_best_multihead_{mat_file}.pth')
+    ckpt_last_path = os.path.join(base_dir, f'mlp_seal_last_multihead_{mat_file}.pth')
+
+    # # --- Resume if last checkpoint exists ---
+    # if os.path.exists(ckpt_last_path):
+    #     ckpt_last = torch.load(ckpt_last_path, map_location=device, weights_only=False)
+
+    #     # Accept either 'model_state_dict' (our last) or 'state_dict' (older best)
+    #     sd = ckpt_last.get('model_state_dict', ckpt_last.get('state_dict', ckpt_last))
+    #     if not isinstance(sd, dict):
+    #         raise RuntimeError('[Resume] Invalid state dict structure in checkpoint')
+    #     # Remove torch serialization metadata that confuses load_state_dict
+    #     sd.pop('_metadata', None)
+
+    #     incompatible = model.load_state_dict(sd, strict=False)
+    #     if getattr(incompatible, 'missing_keys', None) or getattr(incompatible, 'unexpected_keys', None):
+    #         print('[state_dict] missing:', getattr(incompatible, 'missing_keys', []))
+    #         print('[state_dict] unexpected:', getattr(incompatible, 'unexpected_keys', []))
+
+    #     # Optimizer / scheduler might be absent in best-only checkpoints
+    #     if 'optimizer_state_dict' in ckpt_last:
+    #         optimizer.load_state_dict(ckpt_last['optimizer_state_dict'])
+    #     if 'scheduler_state_dict' in ckpt_last:
+    #         scheduler.load_state_dict(ckpt_last['scheduler_state_dict'])
+
+    #     start_epoch = int(ckpt_last.get('epoch', -1)) + 1
+    #     best_val_loss = float(ckpt_last.get('best_val_loss', float('inf')))
+    #     print(f"[Resume] Loaded checkpoint at epoch {start_epoch} (best_val={best_val_loss:.6f})")
+
+    for epoch in range(start_epoch, epochs):
+        model.train(); train_loss = 0.0
+        for params, functions in train_loader:
+            params, functions = params.to(device), functions.to(device)
+            batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
+            optimizer.zero_grad()
+            outputs = model(params, batch_grid)
+            loss = criterion(outputs, functions)
+            loss.backward(); optimizer.step()
+            train_loss += loss.item() * params.size(0)
+
+        model.eval(); val_loss = 0.0
+        with torch.no_grad():
+            for params, functions in val_loader:
+                params, functions = params.to(device), functions.to(device)
+                batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
+                outputs = model(params, batch_grid)
+                val_loss += criterion(outputs, functions).item() * params.size(0)
+
+        train_loss /= len(train_dataset); val_loss /= len(val_dataset)
+
+        if (epoch+1) % 100 == 0 or epoch == start_epoch:
+            print(f'Epoch {epoch+1}/{epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')
+
+        # Save best
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'best_val_loss': best_val_loss,
+                'epoch': epoch
+            }, ckpt_best_path)
+
+        # Save last (full state for resume)
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_val_loss': best_val_loss,
+            'epoch': epoch
+        }, ckpt_last_path)
+
+        scheduler.step()
+    
+    # 저장
+    ckpt = {
+        "state_dict": model.state_dict(),
+        "hparams": {
+            "param_embedding_dim": param_embedding_dim,
+            "hidden_channels": hidden_channels,
+            "n_layers": n_layers,
+            "shared_out_channels": shared_out_channels,
+            "n_params": n_para,
+            "n_heads": n_rdc_coeffs,
+        },
+        # 전처리 스케일러도 같이 저장하면 편함
+        "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
+        "scalers_y_mean": [s.mean_.ravel() for s in scalers_y],
+        "scalers_y_std":  [s.scale_.ravel() for s in scalers_y],
+    }
+    torch.save(ckpt, network_path)
+
+    # --- Evaluate ---
+    model.eval() # 모델을 추론 모드로 바꿈
+
+    n_test_samples = len(test_dataset.indices)
+    test_params = X_tensor[test_dataset.indices].to(device)
+    grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
+
+    with torch.no_grad(): # 예측하는 부분인듯
+        preds_scaled = model(test_params, grid_repeated).cpu().numpy()
+        targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
+
+    preds_tmp, targets_tmp = [], []
+    for i in range(n_rdc_coeffs):
+        preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
+        targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
+
+    preds_orig   = np.stack(preds_tmp,   axis=1)
+    targets_orig = np.stack(targets_tmp, axis=1)
+
+    # 샘플 시각화
+    import matplotlib.colors as mcolors
+    mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+    
+    # rdc_labels = ['c',]
+    # rdc_units = ['N s/m',]
+        
+    # n_plot = 28
+    # j = 0  # 보고 싶은 계수 인덱스 (0~n_rdc_coeffs-1)
+
+    # fig, ax = plt.subplots(figsize=(8, 6))
+
+    # for idx in range(n_plot):
+    #     color = mcolors_list[idx % len(mcolors_list)]
+    #     # ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-',
+    #     #         label=f"True, #{test_dataset.indices[idx]}")
+    #     ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3,
+    #             label=f"Pred, #{test_dataset.indices[idx]}")
+
+    # ax.set_xlabel("Rotational speed [rad/s]")
+    # ax.set_ylabel(rdc_units[j])
+    # ax.set_title(rdc_labels[j])
+    # ax.grid(True)
+    # # 필요하면 legend 추가
+    # ax.legend(ncol=2, fontsize=8)
+
+    # plt.tight_layout()
+    # plt.show()
+    
+
+    rdc_labels = ['C', 'c', 'K', 'k']
+    rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
+        
+    n_plot = 4
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes = axes.flatten()  # 2D -> 1D 배열로 변환
+
+    for j in range(n_rdc_coeffs):
+        ax = axes[j]
+        for idx in range(n_plot):
+            color = mcolors_list[idx % len(mcolors_list)]
+            ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
+                    label=f"True, #{test_dataset.indices[idx]}")
+            ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
+                    label=f"Pred, #{test_dataset.indices[idx]}")
+        ax.set_xlabel('Rotational speed [rad/s]')
+        ax.set_ylabel(f"{rdc_units[j]}")
+        ax.set_title(f"{rdc_labels[j]}")
+        ax.grid(True)
+        ax.legend()
+
+    plt.tight_layout(rect=(0, 0.03, 1, 0.96))
+    plt.show()
+
+    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+    for coeff_idx, label in enumerate(rdc_labels):
+        y_true = np.ravel(targets_orig[:, coeff_idx, :])
+        y_pred = np.ravel(preds_orig[:, coeff_idx, :])
+
+        mse = mean_squared_error(y_true, y_pred)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(y_true, y_pred)
+        r2 = r2_score(y_true, y_pred)
+        yrng = (y_true.max() - y_true.min())
+        rrmse = rmse / (yrng + 1e-12)
+        mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
+
+        print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+            f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+
+    # 전체 지표
+    y_true_all = np.ravel(targets_orig)
+    y_pred_all = np.ravel(preds_orig)
+    mse = mean_squared_error(y_true_all, y_pred_all)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(y_true_all, y_pred_all)
+    r2 = r2_score(y_true_all, y_pred_all)
+    yrng = (y_true_all.max() - y_true_all.min())
+    rrmse = rmse / (yrng + 1e-12)
+    mape = np.mean(np.abs((y_true_all - y_pred_all) / (np.abs(y_true_all) + 1e-12)))
+
+    print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+        f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+
+    import time
+
+    test_params = X_tensor[test_dataset.indices].to(device)
+    test_targets = y_tensor[test_dataset.indices].to(device)
+    grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
+
+    # 예측 시간 측정
+    with torch.no_grad():
+        torch.cuda.synchronize()  # GPU 시간 측정 전 동기화
+        start_time = time.time()
+
+        preds_scaled = model(test_params, grid_repeated)
+
+        torch.cuda.synchronize()
+        end_time = time.time()
+
+    print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
+    print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
+
+    model = MultiHeadParametricMLP(
+        n_params=n_para,
+        param_embedding_dim=param_embedding_dim,
+        hidden_channels=hidden_channels,
+        in_channels=1,
+        n_heads=n_rdc_coeffs,
+        n_layers=n_layers,
+        shared_out_channels=shared_out_channels
+    ).to("cpu")
+    ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
+    sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
+    model.load_state_dict(sd, strict=False)
+    model.eval().to("cpu")
+
+    # --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
+    L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
+    dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
+    dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
+
+    # ts = torch.jit.trace(model, (dummy_params, dummy_grid))
+
+    with torch.no_grad():
+        ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
+
+    ts.save(network_path_ts)

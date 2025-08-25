@@ -24,18 +24,34 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_file = '20250819_T_123831'
 # mat_file = '20250819_T_124655'
 
-mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
-mat_files = ('20250825_T_120952',)
+# mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
+# mat_files = ('20250825_T_120952',)
+# mat_files = ('20250825_T_123550',)
+mat_files = ('20250825_T_125136',)
 
 # 파라미터 설정
 batch_size = 2**9
 criterion = nop.losses.LpLoss(d=1, p=2)
-epochs = 4000
+epochs = 5000
+# epochs = 5000
 param_embedding_dim = 2**8
 fno_modes = 4
 fno_hidden_channels = 2**8
 n_layers = 2
 shared_out_channels = fno_hidden_channels
+
+#######
+batch_size = 2**9
+criterion = nop.losses.LpLoss(d=1, p=2)
+epochs = 1000
+# epochs = 5000
+param_embedding_dim = 2**6
+fno_modes = 4
+fno_hidden_channels = 2**6
+n_layers = 3
+shared_out_channels = fno_hidden_channels
+#######
+
 lr = 1e-4
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
@@ -115,14 +131,14 @@ class MultiHeadParametricFNO(nn.Module):
             nn.Sequential(
                 nn.Conv1d(shared_out_channels, shared_out_channels, 1),
                 nn.GELU(),
-                nn.Identity(),
-                nn.Dropout(0.05),
+                # nn.Identity(),
+                # nn.Dropout(0.05),
                 # depth 2
                 # nn.Conv1d(shared_out_channels, shared_out_channels // 2, 1),
                 nn.Conv1d(shared_out_channels, shared_out_channels, 1),
                 nn.GELU(),
-                nn.Identity(),
-                nn.Dropout(0.05),
+                # nn.Identity(),
+                # nn.Dropout(0.05),
                 # output
                 # nn.Conv1d(shared_out_channels // 2, 1, 1)
                 nn.Conv1d(shared_out_channels, 1, 1)
@@ -243,9 +259,39 @@ for mat_file in mat_files:
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead.pth')
 
-    for epoch in range(epochs):
+    best_val_loss = float('inf')
+    start_epoch = 0
+    ckpt_best_path = os.path.join(base_dir, f'fno_seal_best_multihead_{mat_file}.pth')
+    ckpt_last_path = os.path.join(base_dir, f'fno_seal_last_multihead_{mat_file}.pth')
+
+    # --- Resume if last checkpoint exists ---
+    if os.path.exists(ckpt_last_path):
+        ckpt_last = torch.load(ckpt_last_path, map_location=device, weights_only=False)
+
+        # Accept either 'model_state_dict' (our last) or 'state_dict' (older best)
+        sd = ckpt_last.get('model_state_dict', ckpt_last.get('state_dict', ckpt_last))
+        if not isinstance(sd, dict):
+            raise RuntimeError('[Resume] Invalid state dict structure in checkpoint')
+        # Remove torch serialization metadata that confuses load_state_dict
+        sd.pop('_metadata', None)
+
+        incompatible = model.load_state_dict(sd, strict=False)
+        if getattr(incompatible, 'missing_keys', None) or getattr(incompatible, 'unexpected_keys', None):
+            print('[state_dict] missing:', getattr(incompatible, 'missing_keys', []))
+            print('[state_dict] unexpected:', getattr(incompatible, 'unexpected_keys', []))
+
+        # Optimizer / scheduler might be absent in best-only checkpoints
+        if 'optimizer_state_dict' in ckpt_last:
+            optimizer.load_state_dict(ckpt_last['optimizer_state_dict'])
+        if 'scheduler_state_dict' in ckpt_last:
+            scheduler.load_state_dict(ckpt_last['scheduler_state_dict'])
+
+        start_epoch = int(ckpt_last.get('epoch', -1)) + 1
+        best_val_loss = float(ckpt_last.get('best_val_loss', float('inf')))
+        print(f"[Resume] Loaded checkpoint at epoch {start_epoch} (best_val={best_val_loss:.6f})")
+
+    for epoch in range(start_epoch, epochs):
         model.train(); train_loss = 0.0
         for params, functions in train_loader:
             params, functions = params.to(device), functions.to(device)
@@ -255,6 +301,7 @@ for mat_file in mat_files:
             loss = criterion(outputs, functions)
             loss.backward(); optimizer.step()
             train_loss += loss.item() * params.size(0)
+
         model.eval(); val_loss = 0.0
         with torch.no_grad():
             for params, functions in val_loader:
@@ -262,12 +309,30 @@ for mat_file in mat_files:
                 batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
                 outputs = model(params, batch_grid)
                 val_loss += criterion(outputs, functions).item() * params.size(0)
+
         train_loss /= len(train_dataset); val_loss /= len(val_dataset)
-        if (epoch+1) % 100 == 0:
+
+        if (epoch+1) % 100 == 0 or epoch == start_epoch:
             print(f'Epoch {epoch+1}/{epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')
+
+        # Save best
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save({'state_dict': model.state_dict()}, model_save_path)
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'best_val_loss': best_val_loss,
+                'epoch': epoch
+            }, ckpt_best_path)
+
+        # Save last (full state for resume)
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_val_loss': best_val_loss,
+            'epoch': epoch
+        }, ckpt_last_path)
+
         scheduler.step()
     
     # 저장
