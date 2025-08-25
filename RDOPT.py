@@ -26,6 +26,8 @@ bs_params = {
         'mu_seal': 1.4e-3, # Pa s, seal fluid 
         'rho_seal': 850, # kg/m^3, seal fluid 
     }
+rdc_seal = 0
+rdc_brg = 1
 
 n_ele, n_node, n_add, n_brg, n_seal, rotor_elements, rotor_nodal_props, added_elements, added_props, mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb, brgs, seals = rotor_import(file_path=rotor_file,sheet_name=rotor_sheet,bs_params=bs_params)
 
@@ -60,6 +62,8 @@ brg2_id = np.random.randint(1,55,size=n_pop)[:,None]
 brg1_cr = np.random.randint(10,30,size=n_pop)[:,None] # Cr/D = 10/10000 ~ 30/10000
 brg2_cr = np.random.randint(10,30,size=n_pop)[:,None] 
 brg_params = np.concatenate([brg1_id, brg1_cr, brg2_id, brg2_cr], axis=1)
+brg_params = np.array([[21, 10, 21, 10]])
+
 
 K_brg = np.zeros([n_pop,n_w,4,2])
 C_brg = np.zeros([n_pop,n_w,4,2])
@@ -96,9 +100,13 @@ outputs = [None] * len(seals)  # 원래 순서로 채울 버퍼
 
 n_types = 3
 
-h_in  = np.random.randint(100, 500, size=(n_pop, n_seal, 1))
+h_in  = np.random.randint(100, 500, size=(n_pop, n_seal, 1)) # radial clearance, 100 um ~ 200 um
 h_out = np.random.randint(100, 500, size=(n_pop, n_seal, 1))
-psr   = np.random.randint(0, 10,   size=(n_pop, n_seal, 1))
+psr   = np.random.randint(1, 10,   size=(n_pop, n_seal, 1))
+
+h_in = 100*np.ones((n_pop, n_seal, 1))
+h_out = 100*np.ones((n_pop, n_seal, 1))
+psr = 0*np.ones((n_pop, n_seal, 1))
 
 params_per_type = []
 for t in range(n_types):
@@ -115,6 +123,32 @@ x_type3 = params_per_type[2].reshape(-1, 3)
 y_type1 = seal.predict(1,x_type1,w_vec)
 y_type2 = seal.predict(2,x_type2,w_vec)
 y_type3 = seal.predict(3,x_type3,w_vec)
+
+
+geometry = {
+    'hIn': x_type1[0,0],
+    'hOut': x_type1[0,1],
+    'Ds': seals[0].Ds,
+    'Ls': seals[0].Ls,
+    'NxSeal': 25,
+}
+
+fluid = {
+    'mu': bs_params['mu_seal'],
+    'rho': bs_params['rho_seal'],   
+}
+
+op_conditions = {
+    'dp': seals[0].dp,
+    'w_vec': w_vec,
+    'psr': x_type1[0,2],
+}
+_, RDC, _, _, _, _, _ = seal_solver(geometry=geometry,fluid=fluid,op_conditions=op_conditions)
+
+idx_w = 0
+r1 = RDC[idx_w,2:6]
+r2 = y_type1[0,:,idx_w]
+r1-r2
 
 
 def xy_dofs(node_idx: int) -> tuple[int,int]:
@@ -221,10 +255,10 @@ for iw in range(n_w):
     lst = []
     for i, s in enumerate(seals):
         # 채널: [C, c, K, k]
-        C_ = float(outputs[0, i, 0, iw])
-        c_ = float(outputs[0, i, 1, iw])
-        K_ = float(outputs[0, i, 2, iw])
-        k_ = float(outputs[0, i, 3, iw])
+        C_ = rdc_seal*float(outputs[0, i, 0, iw])
+        c_ = rdc_seal*float(outputs[0, i, 1, iw])
+        K_ = rdc_seal*float(outputs[0, i, 2, iw])
+        k_ = rdc_seal*float(outputs[0, i, 3, iw])
         lst.append({
             'node': int(s.node - 1),  # xy_dofs가 0-based이므로 -1
             'K': K_, 'k': k_, 'C': C_, 'c': c_
@@ -237,8 +271,8 @@ brg_nodes = [b.node for b in brgs]
 K_sup, C_sup = assemble_support_mats_per_speed(
     n_dof=n_dof,
     w_vec=w_vec,
-    K_brg=K_brg,          # (n_pop, n_w, 4, n_brg)
-    C_brg=C_brg,
+    K_brg=rdc_brg*K_brg,          # (n_pop, n_w, 4, n_brg)
+    C_brg=rdc_brg*C_brg,
     brg_nodes=brg_nodes,  # 각 베어링이 연결된 노드
     seal_KkCc_per_speed=seal_KkCc_per_speed
 )
@@ -251,6 +285,13 @@ K_sys, C_sys = build_system_mats(
     w_vec=w_vec
 )
 
+# K_sys, C_sys = build_system_mats(
+#     mat_K_r=mat_K_r,
+#     mat_C_g=mat_C_g,
+#     K_sup=0*K_sup,
+#     C_sup=0*C_sup,
+#     w_vec=w_vec
+# )
 
 import numpy as np
 from scipy.linalg import eig
@@ -258,20 +299,7 @@ from scipy.linalg import eig
 def modal_scan(mat_M: np.ndarray,
                K_sys: np.ndarray,
                C_sys: np.ndarray):
-    """
-    A(ω) x = λ B x,  where
-      A = [[-C(ω), -K(ω)],
-           [   I ,    0 ]]
-      B = [[  M  ,    0 ],
-           [   0 ,    I ]]
 
-    K_sys, C_sys: (n_pop, n_w, n_dof, n_dof)
-    mat_M:        (n_dof, n_dof)
-
-    returns:
-      raw_eig: (n_pop, n_w, n_dof)          # 허수부로 정렬된 상위 Nd개 고유치
-      raw_V:   (n_pop, n_w, n_dof, n_dof)   # 하부 블록(모드형상) 정렬본
-    """
     n_pop, n_w, n_dof, _ = K_sys.shape
     I = np.eye(n_dof)
     Z = np.zeros((n_dof, n_dof))
@@ -285,20 +313,22 @@ def modal_scan(mat_M: np.ndarray,
                           [ I          ,  Z           ]])
             B = np.block([[ mat_M,  Z ],
                           [ Z    ,  I ]])
-            w, V = eig(A, B)                      # w: (2Nd,), V: (2Nd, 2Nd)
+            w, V = eig(A, B)
 
-            # MATLAB: lambda__ = imag(lambda_); [~,sort_idx_] = sort(lambda__);
-            #         sort_idx = sort_idx_(Nd+1:end);  (상위 Nd개 선택)
             idx_all = np.argsort(np.imag(w))
             idx_sel = idx_all[-n_dof:]
 
             raw_eig[j, i] = np.imag(w[idx_sel])
-            raw_V[j, i]   = V[n_dof:, :][:, idx_sel]   # 하부 블록만 취해 정렬
+            raw_V[j, i]   = V[n_dof:, :][:, idx_sel]
+    
+    sigma = np.real(raw_eig)
+    imag_part = np.imag(raw_eig)
+    zeta = -sigma / np.sqrt(sigma**2 + imag_part**2)
 
-    return raw_eig, raw_V
+    return raw_eig, raw_V, zeta
 
 
-raw_eig, raw_vec = modal_scan(mat_M, K_sys, C_sys)
+raw_eig, raw_vec, zeta = modal_scan(mat_M, K_sys, C_sys)
 
 # --- Campbell diagram plotting ---
 
@@ -322,7 +352,7 @@ def plot_campbell(w_vec: np.ndarray,
 
     # axes: x = shaft speed [RPM], y = frequency [Hz]
     rpm = w_vec * 60.0 / (2*np.pi)
-    f_modes = np.abs(raw_eig[j]) / (2*np.pi)  # (n_w, n_dof) in Hz
+    f_modes = raw_eig[j] / (2*np.pi)  # (n_w, n_dof) in Hz
     f_shaft = w_vec / (2*np.pi)               # (n_w,) Hz
 
     plt.figure()
@@ -331,8 +361,8 @@ def plot_campbell(w_vec: np.ndarray,
         plt.plot(rpm, f_modes[:, m])
 
     # excitation lines r×
-    for r in orders:
-        plt.plot(rpm, r * f_shaft, linestyle='--', linewidth=1)
+    # for r in orders:
+    #     plt.plot(rpm, r * f_shaft, linestyle='--', linewidth=1)
 
     plt.xlabel('Shaft speed (RPM)')
     plt.ylabel('Frequency (Hz)')
@@ -342,3 +372,103 @@ def plot_campbell(w_vec: np.ndarray,
 # draw Campbell
 plot_campbell(w_vec, raw_eig, modes=None, orders=(1,2,3), j=0, title='Campbell Diagram (pop 0)')
 
+
+def build_unbalance_force(unb, n_dof, w_vec: np.ndarray):
+    unb_force = np.zeros((n_w, n_dof),dtype=np.complex128)
+    nodes = np.array(unb.cases[0].node, dtype=int)
+    dofs = np.ravel(np.column_stack([4*nodes, 4*nodes+2]))
+
+    for iw, w in enumerate(w_vec):
+        fvec = np.zeros(n_dof, dtype=np.complex128)
+        f = np.asarray(unb.cases[0].force, dtype=np.complex128)
+        fvec[dofs] = f * (w**2)
+        unb_force[iw] = fvec
+    return unb_force
+
+unb_force = build_unbalance_force(unb,n_dof,w_vec)
+
+
+def forced_response(mat_M: np.ndarray,
+               K_sys: np.ndarray,
+               C_sys: np.ndarray,
+               unb_force: np.ndarray,
+               w_vec: np.ndarray):
+    n_w, n_dof = unb_force.shape
+    resp = np.empty((n_w, n_dof), dtype=np.complex128)
+    
+    for i, w in enumerate(w_vec):
+        resp[i] = np.linalg.solve(K_sys[0,i] - w**2*mat_M + 1j*w*C_sys[0,i], unb_force[i])
+        
+    return resp
+
+resp = forced_response(mat_M, K_sys, C_sys, unb_force, w_vec)
+
+# Plot amplitude at each DOF (e.g., norm of displacement)
+rpm = w_vec * 60.0 / (2*np.pi)
+amplitude = np.abs(resp)
+
+
+dof_x = np.arange(0,n_dof,4)
+plt.figure()
+plt.plot(rpm, amplitude[:, dof_x]*1e6, linewidth=1.8)
+
+# --- Helper: build x/y DOF indices from node indices ---
+
+def dof_xy_from_nodes(nodes_list):
+    nodes_arr = np.array(list(nodes_list), dtype=int)
+    dof_x = 4*nodes_arr
+    dof_y = 4*nodes_arr + 2
+    return dof_x, dof_y
+
+# Collect node sets
+brg_nodes_ = [b.node for b in brgs]                      # assumed 0-based (consistent with assembly)
+seal_nodes_ = [s.node - 1 for s in seals]                # seals used 1-based earlier → convert to 0-based
+add_nodes_ = []
+try:
+    add_nodes_ = [e.node for e in added_elements if hasattr(e, 'node')]
+except Exception:
+    pass
+
+# Convert to DOF indices and clip to valid range
+brg_x, brg_y = dof_xy_from_nodes(brg_nodes_)
+seal_x, seal_y = dof_xy_from_nodes(seal_nodes_)
+add_x,  add_y = dof_xy_from_nodes(add_nodes_)
+
+valid = np.arange(amplitude.shape[1])
+brg_x = [d for d in brg_x if d in valid]
+brg_y = [d for d in brg_y if d in valid]
+seal_x = [d for d in seal_x if d in valid]
+seal_y = [d for d in seal_y if d in valid]
+add_x  = [d for d in add_x  if d in valid]
+add_y  = [d for d in add_y  if d in valid]
+
+# --- Plot categorized forced response (μm) ---
+
+plt.figure()
+
+# Bearings
+for dof in brg_x:
+    plt.plot(rpm, amplitude[:, dof]*1e6, label=f'BRG x@{dof}', linewidth=1.8)
+for dof in brg_y:
+    plt.plot(rpm, amplitude[:, dof]*1e6, label=f'BRG y@{dof}', linestyle='--', linewidth=1.8)
+# Seals
+for dof in seal_x:
+    plt.plot(rpm, amplitude[:, dof]*1e6, label=f'SEAL x@{dof}', linewidth=1.2)
+for dof in seal_y:
+    plt.plot(rpm, amplitude[:, dof]*1e6, label=f'SEAL y@{dof}', linestyle='--', linewidth=1.2)
+# Added mass
+for dof in add_x:
+    plt.plot(rpm, amplitude[:, dof]*1e6, label=f'ADD x@{dof}', linewidth=1.2)
+for dof in add_y:
+    plt.plot(rpm, amplitude[:, dof]*1e6, label=f'ADD y@{dof}', linestyle='--', linewidth=1.2)
+
+
+plt.xlabel('Shaft speed (RPM)')
+plt.ylabel('Amplitude [um]')
+plt.title('Forced Response')
+# plt.legend()
+plt.grid(True)
+plt.show()
+    
+# for dof in range(amplitude.shape[1]):
+#     plt.plot(rpm, amplitude[:, dof]*1e6, label=f'DOF {dof}')

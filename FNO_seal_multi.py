@@ -25,15 +25,15 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_file = '20250819_T_124655'
 
 mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
-# mat_files = ('20250819_T_124655',)
+mat_files = ('20250825_T_120952',)
 
 # 파라미터 설정
-batch_size = 2**8
+batch_size = 2**9
 criterion = nop.losses.LpLoss(d=1, p=2)
 epochs = 4000
-param_embedding_dim = 256
+param_embedding_dim = 2**8
 fno_modes = 4
-fno_hidden_channels = 256
+fno_hidden_channels = 2**8
 n_layers = 2
 shared_out_channels = fno_hidden_channels
 lr = 1e-4
