@@ -277,27 +277,39 @@ for mat_file in mat_files:
 
     plt.tight_layout()
     plt.show()
+    
+    # --- TorchScript export: params -> scalar MLP ---
+    import copy
+    model_cpu = copy.deepcopy(model).eval().to("cpu")
 
-    model = SimpleMLP(
-        in_dim=3, 
-        out_dim=1, 
-        hidden_channels=2**6, 
-        n_layers=3, 
-        p_drop=0.1,
-    ).to("cpu")
-    ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
-    sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
-    model.load_state_dict(sd, strict=False)
-    model.eval().to("cpu")
-
-    # --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
-    L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
-    dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
-    dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
-
-    # ts = torch.jit.trace(model, (dummy_params, dummy_grid))
+    in_dim = int(X_tensor.shape[1])                      # 입력 차원
+    dummy_x = torch.zeros(1, in_dim, dtype=torch.float32)  # [B=1, in_dim]
 
     with torch.no_grad():
-        ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
+        ts = torch.jit.trace(model_cpu, dummy_x, check_trace=False)
 
-    ts.save(network_path_ts)
+    ts.save(network_path_ts)  # e.g., 'net/mlp_leak.ts.pt' 같은 경로
+
+    # model = SimpleMLP(
+    #     in_dim=3, 
+    #     out_dim=1, 
+    #     hidden_channels=2**6, 
+    #     n_layers=3, 
+    #     p_drop=0.1,
+    # ).to("cpu")
+    # ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
+    # sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
+    # model.load_state_dict(sd, strict=False)
+    # model.eval().to("cpu")
+
+    # # --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
+    # L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
+    # dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
+    # dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
+
+    # # ts = torch.jit.trace(model, (dummy_params, dummy_grid))
+
+    # with torch.no_grad():
+    #     ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
+
+    # ts.save(network_path_ts)
