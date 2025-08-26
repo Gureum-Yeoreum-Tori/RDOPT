@@ -29,9 +29,8 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_files = ('20250825_T_123550',)
 # mat_files = ('20250825_T_125136',)
 # mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
-mat_files = ('20250826_T_091719','20250826_T_093534',)
-mat_files = ('20250826_T_095326',)
-
+mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
+mat_files = ('20250826_T_091719',)
 
 # 파라미터 설정
 # 파라미터 설정
@@ -40,7 +39,7 @@ criterion = nn.MSELoss()
 epochs = 2000
 hidden_channels = 2**6
 n_layers = 4
-p_drop=0.1
+p_drop=0.01
 
 lr = 1e-5
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -193,6 +192,7 @@ for mat_file in mat_files:
                 "model_state_dict": model.state_dict(),
                 "best_val": best_val_loss,
                 "epoch": epoch,
+                "p_drop": p_drop,
                 "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
                 "scaler_y_mean": scaler_y.mean_.ravel(), "scaler_y_std": scaler_y.scale_.ravel()
             }, "net/mlp_leak_best.pth")
@@ -205,10 +205,12 @@ for mat_file in mat_files:
         "hparams": {
             "hidden_channels": hidden_channels,
             "n_layers": n_layers,
+            "p_drop": p_drop,
         },
         # 전처리 스케일러도 같이 저장하면 편함
         "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
-        "scaler_y_mean": scaler_y.mean_.ravel(), "scaler_y_std": scaler_y.scale_.ravel()
+        # "scaler_y_mean": scaler_y.mean_.ravel(), "scaler_y_std": scaler_y.scale_.ravel(),
+        "scaler_y_mean": scaler_y.mean_, "scaler_y_std": scaler_y.scale_
     }
     torch.save(ckpt, network_path)
 
@@ -220,7 +222,8 @@ for mat_file in mat_files:
         y_pred_scaled = model(X_te).cpu().numpy()
         y_true_scaled = y_te.cpu().numpy()
         
-    y_pred = scaler_y.inverse_transform(y_pred_scaled).ravel()
+    # y_pred = scaler_y.inverse_transform(y_pred_scaled).ravel()
+    y_pred = y_pred_scaled*scaler_y.scale_ + scaler_y.mean_
     y_true = scaler_y.inverse_transform(y_true_scaled).ravel()
 
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
