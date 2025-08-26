@@ -50,12 +50,12 @@ for i, s in enumerate(seals):
     groups[s.SealNet].append(i)
 outputs = [None] * len(seals)  # 원래 순서로 채울 버퍼
 
-n_pop = 122
+n_pop = 24
 n_types = 3
 
-h_in  = np.random.randint(100, 500, size=(n_pop, n_seal, 1)) # radial clearance, 100 um ~ 200 um
-h_out = np.random.randint(100, 500, size=(n_pop, n_seal, 1))
-psr   = np.random.randint(-10, 10,   size=(n_pop, n_seal, 1))
+h_in  = np.random.randint(100, 500, size=(n_pop, n_seal, 1))*1e-6 # radial clearance, 100 um ~ 200 um
+h_out = np.random.randint(100, 500, size=(n_pop, n_seal, 1))*1e-6
+psr   = np.random.randint(-10, 10,   size=(n_pop, n_seal, 1))*1e-1
 
 params_per_type = []
 for t in range(n_types):
@@ -70,9 +70,9 @@ x_type2 = params_per_type[1].reshape(-1, 3)
 x_type3 = params_per_type[2].reshape(-1, 3)
 
 
-leak1 = seal_leak.predict(1,x_type1)
-leak2 = seal_leak.predict(2,x_type2)
-leak3 = seal_leak.predict(3,x_type3)
+leak1 = seal_leak.predict(1,x_type1*[1e6, 1e6, 1e1])
+leak2 = seal_leak.predict(2,x_type2*[1e6, 1e6, 1e1])
+leak3 = seal_leak.predict(3,x_type3*[1e6, 1e6, 1e1])
 
 rdc1 = seal.predict(1,x_type1, w_vec)
 rdc2 = seal.predict(2,x_type2, w_vec)
@@ -116,8 +116,8 @@ def _solve_one_case(i, hIn_um, hOut_um, psr_tenth, Ds, Ls, dp, mu, rho, w_vec, n
     # 단일 케이스 해석 (프로세스용 순수 함수)
     from solver_seal import main_seal_solver as seal_solver  # 각 프로세스에서 임포트
     geometry = {
-        'hIn': float(hIn_um) * 1e-6,
-        'hOut': float(hOut_um) * 1e-6,
+        'hIn': float(hIn_um),
+        'hOut': float(hOut_um),
         'Ds': float(Ds),
         'Ls': float(Ls),
         'NxSeal': int(nx_seal),
@@ -129,7 +129,7 @@ def _solve_one_case(i, hIn_um, hOut_um, psr_tenth, Ds, Ls, dp, mu, rho, w_vec, n
     op_conditions = {
         'dp': float(dp),
         'w_vec': np.asarray(w_vec, dtype=float),
-        'psr': float(psr_tenth) * 1e-1,
+        'psr': float(psr_tenth),
     }
 
     Leak_, RDC_, *_ = seal_solver(geometry=geometry, fluid=fluid, op_conditions=op_conditions)
@@ -156,16 +156,17 @@ Leak = np.zeros((len(x_type1),), dtype=float)
 RDC  = np.zeros((len(x_type1), 4, n_w), dtype=float)
 
 # Windows 호환을 위해 __main__ 가드 권장. 이 스크립트가 직접 실행될 때만 병렬 수행.
-
+#%%
 with ProcessPoolExecutor(max_workers=24) as ex:
     futures = [ex.submit(_solve_one_case, *a) for a in args_list]
     for fut in as_completed(futures):
         i, leak_mean, rdc_slice = fut.result()
         Leak[i] = leak_mean
         RDC[i]  = rdc_slice
-        
-np.mean((rdc1-RDC)/RDC*100,2)
 
+#%%
+errRDC = np.mean((rdc1-RDC)/(RDC+1e-12)*100,2)
+errLeak = (leak1.squeeze()-Leak)/(Leak+1e-12)*100
 # plt.subplot(2,2)
 # plt.plot(w_vec*30/np.pi, RDC[0,0])
 # plt.plot(w_vec*30/np.pi, rdc1[0,0])

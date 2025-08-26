@@ -135,11 +135,11 @@ for mat_file in mat_files:
         # inputNond: [nPara, nData] 형상 파라미터
         input_nond = np.array(mat.get('inputNond'))
         # input: [nPara, nData] [*1e6 *1e6 *1e1]
-        input = np.array(mat.get('input'))
+        input_ = np.array(mat.get('input'))
         # wVec: [1, nVel] 회전 속도 벡터 (좌표 그리드)
         w_vec = np.array(mat['params/wVec'])
-        w_min = w_vec[0]*30/np.pi
-        w_max = w_vec[-1]*30/np.pi
+        w_min = w_vec[0,0]*30/np.pi
+        w_max = w_vec[0,-1]*30/np.pi
         # RDC: [6, nVel, nData] 동특성 계수 (타겟 함수)
         rdc = np.array(mat.get('RDC'))
         rdc = rdc[2:6,:,:] # no mass
@@ -147,12 +147,12 @@ for mat_file in mat_files:
         # rdc = rdc[2:3,:,:] # no mass
         # rdc = rdc[3,:,:][None,:,:] # no mass
 
-        n_para, n_data = input.shape
+        n_para, n_data = input_.shape
         _, n_vel = w_vec.shape
         n_rdc_coeffs = rdc.shape[0] # 6 
 
         # 입력 데이터 (X): 형상 파라미터 [nData, nPara]
-        X_params = input.T
+        X_params = input_.T
 
         # 출력 데이터 (y): 동특성 계수 함수 [nData, nVel, nRDC]
         # FNO는 (batch, channels, grid_points) 형태를 선호하므로 [nData, nRDC, nVel]로 변경이라고 GPT가 그럔다
