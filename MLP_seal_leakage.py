@@ -28,7 +28,9 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_files = ('20250825_T_120952',)
 # mat_files = ('20250825_T_123550',)
 # mat_files = ('20250825_T_125136',)
-mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
+# mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
+mat_files = ('20250826_T_091719','20250826_T_093534',)
+mat_files = ('20250826_T_095326',)
 
 
 # 파라미터 설정
@@ -38,6 +40,7 @@ criterion = nn.MSELoss()
 epochs = 2000
 hidden_channels = 2**6
 n_layers = 4
+p_drop=0.1
 
 lr = 1e-5
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -50,20 +53,21 @@ hyperparams = {
     "Batch size": batch_size,
     "# of hidden channels": hidden_channels,
     "# of layers": n_layers,
-    "Learning rate": f"{lr:.1e}"
+    "p_drop": p_drop,
+    "Learning rate": f"{lr:.1e}",
 }
 
 print(json.dumps(hyperparams, indent=2))
 
 class SimpleMLP(nn.Module):
-    def __init__(self, in_dim, out_dim, hidden_channels, n_layers, p_drop=0.1):
+    def __init__(self, in_dim, out_dim, hidden_channels, n_layers, p_drop=p_drop):
         super().__init__()
 
         layers = []
         # 입력층
         layers.append(nn.Linear(in_dim, hidden_channels))
         layers.append(nn.ReLU())
-        layers.append(nn.Dropout(p_drop))
+        # layers.append(nn.Dropout(p_drop))
 
         # 히든층
         for _ in range(n_layers - 1):
@@ -146,9 +150,9 @@ for mat_file in mat_files:
     model = SimpleMLP(
         in_dim=3, 
         out_dim=1, 
-        hidden_channels=2**6, 
-        n_layers=3, 
-        p_drop=0.1,
+        hidden_channels=hidden_channels, 
+        n_layers=n_layers, 
+        p_drop=p_drop,
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
