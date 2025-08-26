@@ -26,16 +26,18 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_files = ('20250825_T_120952',)
 # mat_files = ('20250825_T_123550',)
 # mat_files = ('20250825_T_125136',)
-mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
+# mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
+mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
 
 # 파라미터 설정
-batch_size = 2**11
+batch_size = 2**10
 criterion = nn.MSELoss()
-epochs = 3000
+epochs = 5000
 param_embedding_dim = 2**8
 hidden_channels = 2**8
-n_layers = 6
+n_layers = 8
 shared_out_channels = hidden_channels
+p_drop = 0.02
 
 lr = 1e-5
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -50,7 +52,8 @@ hyperparams = {
     "# of hidden channels": hidden_channels,
     "# of layers": n_layers,
     "# of shared output channels": shared_out_channels,
-    "Learning rate": f"{lr:.1e}"
+    "Learning rate": f"{lr:.1e}",
+    "p_drop": p_drop,
 }
 
 print(json.dumps(hyperparams, indent=2))
@@ -68,7 +71,7 @@ class MultiHeadDeepONet(nn.Module):
                  n_heads: int,
                  n_layers: int,
                  n_basis: int,
-                 p_drop: float = 0.02):
+                 p_drop: float):
         super().__init__()
         self.n_heads = n_heads
         self.n_basis = n_basis
@@ -217,7 +220,7 @@ for mat_file in mat_files:
         n_heads=n_rdc_coeffs,
         n_layers=n_layers,
         n_basis=shared_out_channels,   # 기존 shared_out_channels를 기저 개수로 사용
-        p_drop=0.05
+        p_drop=p_drop
     ).to(device)
 
     # model = MultiHeadParametricMLP(
@@ -448,20 +451,23 @@ for mat_file in mat_files:
 
     print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
     print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
+    
+    import copy
+    model_cpu = copy.deepcopy(model).eval().to("cpu")
 
-    model = MultiHeadDeepONet(
-        n_params=n_para,
-        param_embedding_dim=param_embedding_dim,
-        hidden_channels=hidden_channels,
-        n_heads=n_rdc_coeffs,
-        n_layers=n_layers,
-        n_basis=shared_out_channels,   # 기존 shared_out_channels를 기저 개수로 사용
-        p_drop=0.05
-    ).to("cpu")
-    ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
-    sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
-    model.load_state_dict(sd, strict=False)
-    model.eval().to("cpu")
+    # model = MultiHeadDeepONet(
+    #     n_params=n_para,
+    #     param_embedding_dim=param_embedding_dim,
+    #     hidden_channels=hidden_channels,
+    #     n_heads=n_rdc_coeffs,
+    #     n_layers=n_layers,
+    #     n_basis=shared_out_channels,   # 기존 shared_out_channels를 기저 개수로 사용
+    #     p_drop=p_drop,
+    # ).to("cpu")
+    # ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
+    # sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
+    # model.load_state_dict(sd, strict=False)
+    # model.eval().to("cpu")
 
     # --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
     L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
@@ -471,6 +477,6 @@ for mat_file in mat_files:
     # ts = torch.jit.trace(model, (dummy_params, dummy_grid))
 
     with torch.no_grad():
-        ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
+        ts = torch.jit.trace(model_cpu, (dummy_params, dummy_grid), check_trace=False)
 
     ts.save(network_path_ts)
