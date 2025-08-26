@@ -37,7 +37,7 @@ param_embedding_dim = 2**8
 hidden_channels = 2**8
 n_layers = 8
 shared_out_channels = hidden_channels
-p_drop = 0.02
+p_drop = 0
 
 lr = 1e-5
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -134,8 +134,12 @@ for mat_file in mat_files:
     with h5py.File(mat_path, 'r') as mat:
         # inputNond: [nPara, nData] 형상 파라미터
         input_nond = np.array(mat.get('inputNond'))
+        # input: [nPara, nData] [*1e6 *1e6 *1e1]
+        input = np.array(mat.get('input'))
         # wVec: [1, nVel] 회전 속도 벡터 (좌표 그리드)
         w_vec = np.array(mat['params/wVec'])
+        w_min = w_vec[0]*30/np.pi
+        w_max = w_vec[-1]*30/np.pi
         # RDC: [6, nVel, nData] 동특성 계수 (타겟 함수)
         rdc = np.array(mat.get('RDC'))
         rdc = rdc[2:6,:,:] # no mass
@@ -143,12 +147,12 @@ for mat_file in mat_files:
         # rdc = rdc[2:3,:,:] # no mass
         # rdc = rdc[3,:,:][None,:,:] # no mass
 
-        n_para, n_data = input_nond.shape
+        n_para, n_data = input.shape
         _, n_vel = w_vec.shape
         n_rdc_coeffs = rdc.shape[0] # 6 
 
         # 입력 데이터 (X): 형상 파라미터 [nData, nPara]
-        X_params = input_nond.T
+        X_params = input.T
 
         # 출력 데이터 (y): 동특성 계수 함수 [nData, nVel, nRDC]
         # FNO는 (batch, channels, grid_points) 형태를 선호하므로 [nData, nRDC, nVel]로 변경이라고 GPT가 그럔다
@@ -321,6 +325,11 @@ for mat_file in mat_files:
             "shared_out_channels": shared_out_channels,
             "n_params": n_para,
             "n_heads": n_rdc_coeffs,
+            "p_drop": p_drop,
+        },
+        "additional": {
+            "w_min": w_min,
+            "w_max": w_max,
         },
         # 전처리 스케일러도 같이 저장하면 편함
         "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
@@ -355,7 +364,7 @@ for mat_file in mat_files:
     rdc_labels = ['c',]
     rdc_units = ['N s/m',]
         
-    n_plot = 4
+    # n_plot = 4
     
     # j = 0  # 보고 싶은 계수 인덱스 (0~n_rdc_coeffs-1)
     # fig, ax = plt.subplots(figsize=(8, 6))
