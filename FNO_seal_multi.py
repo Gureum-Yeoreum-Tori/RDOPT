@@ -48,7 +48,7 @@ epochs = 5000
 param_embedding_dim = 2**8
 fno_modes = 4
 fno_hidden_channels = 2**6
-n_layers = 3
+n_layers = 4
 shared_out_channels = fno_hidden_channels
 #######
 
