@@ -273,6 +273,7 @@ for mat_file in mat_files:
 
     for epoch in range(start_epoch, epochs):
         model.train(); train_loss = 0.0
+        n_train = 0
         for params, functions in train_loader:
             params, functions = params.to(device), functions.to(device)
             batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
@@ -281,16 +282,19 @@ for mat_file in mat_files:
             loss = criterion(outputs, functions)
             loss.backward(); optimizer.step()
             train_loss += loss.item() * params.size(0)
-
+            n_train += params.size(0)
+        train_loss /= n_train
+        
         model.eval(); val_loss = 0.0
+        n_val = 0
         with torch.no_grad():
             for params, functions in val_loader:
                 params, functions = params.to(device), functions.to(device)
                 batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
                 outputs = model(params, batch_grid)
                 val_loss += criterion(outputs, functions).item() * params.size(0)
-
-        train_loss /= len(train_dataset); val_loss /= len(val_dataset)
+                n_val    += params.size(0)
+        val_loss /= n_val
 
         if (epoch+1) % 100 == 0 or epoch == start_epoch:
             print(f'Epoch {epoch+1}/{epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')

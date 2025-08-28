@@ -36,12 +36,12 @@ mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
 # 파라미터 설정
 batch_size = 2**10
 criterion = nn.MSELoss()
-epochs = 3000
+epochs = 5000
 hidden_channels = 2**6
-n_layers = 4
+n_layers = 5
 p_drop=0.0
 
-lr = 1e-5
+lr = 1e-4
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 weight_decay=1e-5
@@ -128,8 +128,8 @@ for mat_file in mat_files:
     dataset = TensorDataset(X_tensor, y_tensor)
 
     dataset_size = len(dataset)
-    train_size = int(dataset_size * 0.7)
-    val_size = int(dataset_size * 0.15)
+    train_size = int(dataset_size * 0.8)
+    val_size = int(dataset_size * 0.12)
     test_size = dataset_size - train_size - val_size
 
     from torch.utils.data import Subset
@@ -162,6 +162,7 @@ for mat_file in mat_files:
     best_val_loss = float('inf')
     start_epoch = 0
 
+    hist_train, hist_val = [], []
     for epoch in range(start_epoch, epochs):
         model.train(); train_loss = 0.0
         n_train = 0
@@ -186,6 +187,9 @@ for mat_file in mat_files:
                 val_loss += criterion(pred, yb).item()*xb.size(0)
                 n_val    += xb.size(0)
         val_loss /= n_val
+        
+        hist_train.append(train_loss)
+        hist_val.append(val_loss)
 
         if (epoch+1) % 100 == 0 or epoch == start_epoch:
             print(f'Epoch {epoch+1}/{epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')
@@ -218,6 +222,16 @@ for mat_file in mat_files:
         "scaler_y_mean": scaler_y.mean_, "scaler_y_std": scaler_y.scale_
     }
     torch.save(ckpt, network_path)
+    
+    plt.figure()
+    plt.plot(hist_train, label='train')
+    plt.plot(hist_val,   label='val')
+    plt.yscale('log')             # 손실 스케일 차이 크면 로그가 가독성↑
+    plt.xlabel('epoch'); plt.ylabel('MSE')
+    plt.title('Training / Validation Loss')
+    plt.grid(True, linestyle=':')
+    plt.legend()
+    plt.tight_layout(); plt.show()
 
     # --- Evaluate ---
     model.eval()
@@ -228,8 +242,13 @@ for mat_file in mat_files:
         y_true_scaled = y_te.cpu().numpy()
         
     y_pred = scaler_y.inverse_transform(y_pred_scaled)
-    # y_pred = (y_pred_scaled*scaler_y.scale_ + scaler_y.mean_).transpose()
     y_true = scaler_y.inverse_transform(y_true_scaled)
+    
+    res = (y_pred - y_true).ravel()
+    for k, name in enumerate(['hIn','hOut','psr']):
+        plt.figure(); plt.scatter(X_params[test_idx,k], res, s=8, alpha=0.5)
+        plt.xlabel(name); plt.ylabel('residual'); plt.grid(True, linestyle=':')
+        plt.tight_layout(); plt.show()
 
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     mae  = mean_absolute_error(y_true, y_pred)
@@ -289,6 +308,28 @@ for mat_file in mat_files:
 
     plt.tight_layout()
     plt.show()
+    #%%
+    # X1 = X_params[0]
+    # L1 = Leak[0]
+    
+    idx_1 = 1241
+    
+    def pred1(idx_1):
+        with torch.no_grad():
+            X_te = torch.tensor(scaler_X.transform(X_params[idx_1].reshape(1, -1)), dtype=torch.float32).to(device)
+            # y_te = Leak[0].to(device)
+            y_pred_scaled = model(X_te).cpu().numpy()
+            # y_true_scaled = y_te.cpu().numpy()
+            
+        y_pred = scaler_y.inverse_transform(y_pred_scaled)
+        # y_pred = (y_pred_scaled*scaler_y.scale_ + scaler_y.mean_).transpose()
+        # y_true = scaler_y.inverse_transform(y_true_scaled)
+        
+        print(f"numerical: {Leak[idx_1]}")
+        print(f"prediction: {y_pred}")
+        
+        
+        
     
     # --- TorchScript export: params -> scalar MLP ---
     import copy
@@ -325,3 +366,5 @@ for mat_file in mat_files:
     #     ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
 
     # ts.save(network_path_ts)
+    
+    
