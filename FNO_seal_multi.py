@@ -27,32 +27,33 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_files = ('20250819_T_123001', '20250819_T_123831', '20250819_T_124655',)
 # mat_files = ('20250825_T_120952',)
 # mat_files = ('20250825_T_123550',)
-mat_files = ('20250825_T_125136',)
+# mat_files = ('20250825_T_125136',)
+mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
 
-# 파라미터 설정
-batch_size = 2**9
+# # 파라미터 설정
+# batch_size = 2**10
+# criterion = nop.losses.LpLoss(d=1, p=2)
+# epochs = 5000
+# # epochs = 5000
+# param_embedding_dim = 2**8
+# fno_modes = 4
+# fno_hidden_channels = 2**8
+# n_layers = 2
+# shared_out_channels = fno_hidden_channels
+
+#######
+batch_size = 2**10
 criterion = nop.losses.LpLoss(d=1, p=2)
 epochs = 5000
 # epochs = 5000
 param_embedding_dim = 2**8
-fno_modes = 4
-fno_hidden_channels = 2**8
-n_layers = 2
-shared_out_channels = fno_hidden_channels
-
-#######
-batch_size = 2**9
-criterion = nop.losses.LpLoss(d=1, p=2)
-epochs = 1000
-# epochs = 5000
-param_embedding_dim = 2**6
 fno_modes = 4
 fno_hidden_channels = 2**6
 n_layers = 3
 shared_out_channels = fno_hidden_channels
 #######
 
-lr = 1e-4
+lr = 1e-5
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 weight_decay=1e-5
@@ -71,38 +72,6 @@ hyperparams = {
 
 print(json.dumps(hyperparams, indent=2))
 
-class ParametricFNO(nn.Module):
-    """
-    기존: 형상 파라미터를 조건으로 받아 함수를 예측하는 FNO 모델 (단일 네트워크)
-    outputs: [B, out_channels, n_vel]
-    """
-    def __init__(self, n_params, param_embedding_dim, fno_modes, fno_hidden_channels, in_channels, out_channels,n_layers):
-        super().__init__()
-        self.n_params = n_params
-        self.param_encoder = nn.Sequential(
-            nn.Linear(n_params, param_embedding_dim),
-            nn.ReLU(),
-            nn.Linear(param_embedding_dim, param_embedding_dim)
-        )
-        self.fno = FNO(
-            n_modes=(fno_modes,),
-            hidden_channels=fno_hidden_channels,
-            n_layers=n_layers,
-            in_channels=in_channels + param_embedding_dim,
-            out_channels=out_channels,
-            # positional_embedding=None,
-            # domain_padding=0.25,
-            # domain_padding_mode='symmetric',
-        )
-
-    def forward(self, params, grid):
-        # params: [B, n_params], grid: [B, n_vel, 1]
-        pe = self.param_encoder(params)                      # [B, emb]
-        pe = pe.unsqueeze(1).repeat(1, grid.shape[1], 1)    # [B, n_vel, emb]
-        fno_in = torch.cat([grid, pe], dim=-1).permute(0, 2, 1)  # [B, 1+emb, n_vel]
-        out = self.fno(fno_in)  # [B, out_channels, n_vel]
-        return out
-    
 class MultiHeadParametricFNO(nn.Module):
     """
     FNO 본체는 공유하고, 채널별 1x1 Conv1d 헤드를 분리하는 멀티헤드 구조.
@@ -122,9 +91,6 @@ class MultiHeadParametricFNO(nn.Module):
             n_layers=n_layers,
             in_channels=in_channels + param_embedding_dim,
             out_channels=shared_out_channels,
-            # positional_embedding=None,
-            # domain_padding=0.25,
-            # domain_padding_mode='symmetric',
         )
         
         self.heads = nn.ModuleList([
@@ -134,14 +100,14 @@ class MultiHeadParametricFNO(nn.Module):
                 # nn.Identity(),
                 # nn.Dropout(0.05),
                 # depth 2
-                # nn.Conv1d(shared_out_channels, shared_out_channels // 2, 1),
-                nn.Conv1d(shared_out_channels, shared_out_channels, 1),
+                nn.Conv1d(shared_out_channels, shared_out_channels // 2, 1),
+                # nn.Conv1d(shared_out_channels, shared_out_channels, 1),
                 nn.GELU(),
                 # nn.Identity(),
                 # nn.Dropout(0.05),
                 # output
-                # nn.Conv1d(shared_out_channels // 2, 1, 1)
-                nn.Conv1d(shared_out_channels, 1, 1)
+                nn.Conv1d(shared_out_channels // 2, 1, 1)
+                # nn.Conv1d(shared_out_channels, 1, 1)
             ) for _ in range(n_heads)
         ])
 
@@ -160,28 +126,28 @@ for mat_file in mat_files:
     
     base_dir = 'net'
     os.makedirs(base_dir, exist_ok=True)
-    model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead_'+mat_file+'_2'+'.pth')
-    network_path = os.path.join(base_dir, 'fno_multihead_'+mat_file+'_2'+'.pth')
-    network_path_ts = os.path.join(base_dir, 'fno_multihead_'+mat_file+'_2'+'.pt')
+    model_save_path = os.path.join(base_dir, 'fno_seal_best_multihead_'+mat_file+'.pth')
+    network_path = os.path.join(base_dir, 'fno_multihead_'+mat_file+'.pth')
+    network_path_ts = os.path.join(base_dir, 'fno_multihead_'+mat_file+'.pt')
 
     # 데이터 로딩 및 전처리
     with h5py.File(mat_path, 'r') as mat:
         # inputNond: [nPara, nData] 형상 파라미터
-        input_nond = np.array(mat.get('inputNond'))
-        # wVec: [1, nVel] 회전 속도 벡터 (좌표 그리드)
+        input_ = np.array(mat.get('input'))
+
         w_vec = np.array(mat['params/wVec'])
-        # RDC: [6, nVel, nData] 동특성 계수 (타겟 함수)
+        w_min = w_vec[0,0]*30/np.pi
+        w_max = w_vec[0,-1]*30/np.pi
+
         rdc = np.array(mat.get('RDC'))
         rdc = rdc[2:6,:,:] # no mass
-        # rdc = rdc[2:4,:,:] # no mass
-        # rdc = rdc[2:3,:,:] # no mass
 
-        n_para, n_data = input_nond.shape
+        n_para, n_data = input_.shape
         _, n_vel = w_vec.shape
-        n_rdc_coeffs = rdc.shape[0] # 6 
+        n_rdc_coeffs = rdc.shape[0]
 
         # 입력 데이터 (X): 형상 파라미터 [nData, nPara]
-        X_params = input_nond.T
+        X_params = input_.T
 
         # 출력 데이터 (y): 동특성 계수 함수 [nData, nVel, nRDC]
         # FNO는 (batch, channels, grid_points) 형태를 선호하므로 [nData, nRDC, nVel]로 변경이라고 GPT가 그럔다
@@ -219,7 +185,6 @@ for mat_file in mat_files:
     # Torch 텐서로 변환
     X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
     y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
-    # y_tensor = torch.tensor(y_scaled, dtype=torch.float32).unsqueeze(1)
     grid_tensor = torch.tensor(grid, dtype=torch.float32)
 
     # 데이터셋 및 데이터로더 생성
@@ -265,52 +230,64 @@ for mat_file in mat_files:
     ckpt_best_path = os.path.join(base_dir, f'fno_seal_best_multihead_{mat_file}.pth')
     ckpt_last_path = os.path.join(base_dir, f'fno_seal_last_multihead_{mat_file}.pth')
 
-    # --- Resume if last checkpoint exists ---
-    if os.path.exists(ckpt_last_path):
-        ckpt_last = torch.load(ckpt_last_path, map_location=device, weights_only=False)
+    # # --- Resume if last checkpoint exists ---
+    # if os.path.exists(ckpt_last_path):
+    #     ckpt_last = torch.load(ckpt_last_path, map_location=device, weights_only=False)
 
-        # Accept either 'model_state_dict' (our last) or 'state_dict' (older best)
-        sd = ckpt_last.get('model_state_dict', ckpt_last.get('state_dict', ckpt_last))
-        if not isinstance(sd, dict):
-            raise RuntimeError('[Resume] Invalid state dict structure in checkpoint')
-        # Remove torch serialization metadata that confuses load_state_dict
-        sd.pop('_metadata', None)
+    #     # Accept either 'model_state_dict' (our last) or 'state_dict' (older best)
+    #     sd = ckpt_last.get('model_state_dict', ckpt_last.get('state_dict', ckpt_last))
+    #     if not isinstance(sd, dict):
+    #         raise RuntimeError('[Resume] Invalid state dict structure in checkpoint')
+    #     # Remove torch serialization metadata that confuses load_state_dict
+    #     sd.pop('_metadata', None)
 
-        incompatible = model.load_state_dict(sd, strict=False)
-        if getattr(incompatible, 'missing_keys', None) or getattr(incompatible, 'unexpected_keys', None):
-            print('[state_dict] missing:', getattr(incompatible, 'missing_keys', []))
-            print('[state_dict] unexpected:', getattr(incompatible, 'unexpected_keys', []))
+    #     incompatible = model.load_state_dict(sd, strict=False)
+    #     if getattr(incompatible, 'missing_keys', None) or getattr(incompatible, 'unexpected_keys', None):
+    #         print('[state_dict] missing:', getattr(incompatible, 'missing_keys', []))
+    #         print('[state_dict] unexpected:', getattr(incompatible, 'unexpected_keys', []))
 
-        # Optimizer / scheduler might be absent in best-only checkpoints
-        if 'optimizer_state_dict' in ckpt_last:
-            optimizer.load_state_dict(ckpt_last['optimizer_state_dict'])
-        if 'scheduler_state_dict' in ckpt_last:
-            scheduler.load_state_dict(ckpt_last['scheduler_state_dict'])
+    #     # Optimizer / scheduler might be absent in best-only checkpoints
+    #     if 'optimizer_state_dict' in ckpt_last:
+    #         optimizer.load_state_dict(ckpt_last['optimizer_state_dict'])
+    #     if 'scheduler_state_dict' in ckpt_last:
+    #         scheduler.load_state_dict(ckpt_last['scheduler_state_dict'])
 
-        start_epoch = int(ckpt_last.get('epoch', -1)) + 1
-        best_val_loss = float(ckpt_last.get('best_val_loss', float('inf')))
-        print(f"[Resume] Loaded checkpoint at epoch {start_epoch} (best_val={best_val_loss:.6f})")
+    #     start_epoch = int(ckpt_last.get('epoch', -1)) + 1
+    #     best_val_loss = float(ckpt_last.get('best_val_loss', float('inf')))
+    #     print(f"[Resume] Loaded checkpoint at epoch {start_epoch} (best_val={best_val_loss:.6f})")
 
+    best_val_loss = float('inf')
+    start_epoch = 0
+
+    hist_train, hist_val = [], []
     for epoch in range(start_epoch, epochs):
         model.train(); train_loss = 0.0
+        n_train = 0
         for params, functions in train_loader:
             params, functions = params.to(device), functions.to(device)
             batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
             optimizer.zero_grad()
             outputs = model(params, batch_grid)
             loss = criterion(outputs, functions)
-            loss.backward(); optimizer.step()
+            loss.backward(); 
+            optimizer.step()
             train_loss += loss.item() * params.size(0)
-
+            n_train += params.size(0)
+        train_loss /= n_train
+        
         model.eval(); val_loss = 0.0
+        n_val = 0
         with torch.no_grad():
             for params, functions in val_loader:
                 params, functions = params.to(device), functions.to(device)
                 batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
                 outputs = model(params, batch_grid)
                 val_loss += criterion(outputs, functions).item() * params.size(0)
-
-        train_loss /= len(train_dataset); val_loss /= len(val_dataset)
+                n_val += params.size(0)
+        val_loss /= n_val
+        
+        hist_train.append(train_loss)
+        hist_val.append(val_loss)
 
         if (epoch+1) % 100 == 0 or epoch == start_epoch:
             print(f'Epoch {epoch+1}/{epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')
@@ -347,6 +324,10 @@ for mat_file in mat_files:
             "n_params": n_para,
             "n_heads": n_rdc_coeffs,
         },
+        "additional": {
+            "w_min": w_min,
+            "w_max": w_max,
+        },
         # 전처리 스케일러도 같이 저장하면 편함
         "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
         "scalers_y_mean": [s.mean_.ravel() for s in scalers_y],
@@ -354,28 +335,40 @@ for mat_file in mat_files:
     }
     torch.save(ckpt, network_path)
 
+    ## save torch script
+    import copy
+    model_cpu = copy.deepcopy(model).eval().to("cpu")
+    L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
+    dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
+    dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
+
+    with torch.no_grad():
+        ts = torch.jit.trace(model_cpu, (dummy_params, dummy_grid), check_trace=False)
+
+    ts.save(network_path_ts)
+    
     # --- Evaluate ---
-    model.eval() # 모델을 추론 모드로 바꿈
+    # model.eval() # 모델을 추론 모드로 바꿈
 
-    n_test_samples = len(test_dataset.indices)
-    test_params = X_tensor[test_dataset.indices].to(device)
-    grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
+    # n_test_samples = len(test_dataset.indices)
+    # test_params = X_tensor[test_dataset.indices].to(device)
+    # grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
 
-    with torch.no_grad(): # 예측하는 부분인듯
-        preds_scaled = model(test_params, grid_repeated).cpu().numpy()
-        targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
+    # with torch.no_grad(): # 예측하는 부분인듯
+    #     preds_scaled = model(test_params, grid_repeated).cpu().numpy()
+    #     targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
 
-    preds_tmp, targets_tmp = [], []
-    for i in range(n_rdc_coeffs):
-        preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
-        targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
+    # preds_tmp, targets_tmp = [], []
+    # for i in range(n_rdc_coeffs):
+    #     preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
+    #     targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
 
-    preds_orig   = np.stack(preds_tmp,   axis=1)
-    targets_orig = np.stack(targets_tmp, axis=1)
+    # preds_orig   = np.stack(preds_tmp,   axis=1)
+    # targets_orig = np.stack(targets_tmp, axis=1)
 
     # 샘플 시각화
-    import matplotlib.colors as mcolors
-    mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+    # import matplotlib.colors as mcolors
+    # mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
     # # mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
     # # rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
     # # rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
@@ -421,106 +414,106 @@ for mat_file in mat_files:
     #         f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
         
         
-    rdc_labels = ['C', 'c', 'K', 'k']
-    rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
+    # rdc_labels = ['C', 'c', 'K', 'k']
+    # rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
         
-    n_plot = 48
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.flatten()  # 2D -> 1D 배열로 변환
+    # n_plot = 48
+    # fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    # axes = axes.flatten()  # 2D -> 1D 배열로 변환
 
-    for j in range(n_rdc_coeffs):
-        ax = axes[j]
-        for idx in range(n_plot):
-            color = mcolors_list[idx % len(mcolors_list)]
-            ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
-                    label=f"True, #{test_dataset.indices[idx]}")
-            ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
-                    label=f"Pred, #{test_dataset.indices[idx]}")
-        ax.set_xlabel('Rotational speed [rad/s]')
-        ax.set_ylabel(f"{rdc_units[j]}")
-        ax.set_title(f"{rdc_labels[j]}")
-        ax.grid(True)
-        # ax.legend()
+    # for j in range(n_rdc_coeffs):
+    #     ax = axes[j]
+    #     for idx in range(n_plot):
+    #         color = mcolors_list[idx % len(mcolors_list)]
+    #         ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
+    #                 label=f"True, #{test_dataset.indices[idx]}")
+    #         ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
+    #                 label=f"Pred, #{test_dataset.indices[idx]}")
+    #     ax.set_xlabel('Rotational speed [rad/s]')
+    #     ax.set_ylabel(f"{rdc_units[j]}")
+    #     ax.set_title(f"{rdc_labels[j]}")
+    #     ax.grid(True)
+    #     # ax.legend()
 
-    plt.tight_layout(rect=(0, 0.03, 1, 0.96))
-    plt.show()
+    # plt.tight_layout(rect=(0, 0.03, 1, 0.96))
+    # plt.show()
 
-    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+    # from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-    for coeff_idx, label in enumerate(rdc_labels):
-        y_true = np.ravel(targets_orig[:, coeff_idx, :])
-        y_pred = np.ravel(preds_orig[:, coeff_idx, :])
+    # for coeff_idx, label in enumerate(rdc_labels):
+    #     y_true = np.ravel(targets_orig[:, coeff_idx, :])
+    #     y_pred = np.ravel(preds_orig[:, coeff_idx, :])
 
-        mse = mean_squared_error(y_true, y_pred)
-        rmse = np.sqrt(mse)
-        mae = mean_absolute_error(y_true, y_pred)
-        r2 = r2_score(y_true, y_pred)
-        yrng = (y_true.max() - y_true.min())
-        rrmse = rmse / (yrng + 1e-12)
-        mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
+    #     mse = mean_squared_error(y_true, y_pred)
+    #     rmse = np.sqrt(mse)
+    #     mae = mean_absolute_error(y_true, y_pred)
+    #     r2 = r2_score(y_true, y_pred)
+    #     yrng = (y_true.max() - y_true.min())
+    #     rrmse = rmse / (yrng + 1e-12)
+    #     mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
 
-        print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
-            f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+    #     print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+    #         f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
 
-    # 전체 지표
-    y_true_all = np.ravel(targets_orig)
-    y_pred_all = np.ravel(preds_orig)
-    mse = mean_squared_error(y_true_all, y_pred_all)
-    rmse = np.sqrt(mse)
-    mae = mean_absolute_error(y_true_all, y_pred_all)
-    r2 = r2_score(y_true_all, y_pred_all)
-    yrng = (y_true_all.max() - y_true_all.min())
-    rrmse = rmse / (yrng + 1e-12)
-    mape = np.mean(np.abs((y_true_all - y_pred_all) / (np.abs(y_true_all) + 1e-12)))
+    # # 전체 지표
+    # y_true_all = np.ravel(targets_orig)
+    # y_pred_all = np.ravel(preds_orig)
+    # mse = mean_squared_error(y_true_all, y_pred_all)
+    # rmse = np.sqrt(mse)
+    # mae = mean_absolute_error(y_true_all, y_pred_all)
+    # r2 = r2_score(y_true_all, y_pred_all)
+    # yrng = (y_true_all.max() - y_true_all.min())
+    # rrmse = rmse / (yrng + 1e-12)
+    # mape = np.mean(np.abs((y_true_all - y_pred_all) / (np.abs(y_true_all) + 1e-12)))
 
-    print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
-        f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+    # print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+    #     f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
 
-    import time
+    # import time
 
-    test_params = X_tensor[test_dataset.indices].to(device)
-    test_targets = y_tensor[test_dataset.indices].to(device)
-    grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
+    # test_params = X_tensor[test_dataset.indices].to(device)
+    # test_targets = y_tensor[test_dataset.indices].to(device)
+    # grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
 
-    # 예측 시간 측정
-    with torch.no_grad():
-        torch.cuda.synchronize()  # GPU 시간 측정 전 동기화
-        start_time = time.time()
+    # # 예측 시간 측정
+    # with torch.no_grad():
+    #     torch.cuda.synchronize()  # GPU 시간 측정 전 동기화
+    #     start_time = time.time()
 
-        preds_scaled = model(test_params, grid_repeated)
+    #     preds_scaled = model(test_params, grid_repeated)
 
-        torch.cuda.synchronize()
-        end_time = time.time()
+    #     torch.cuda.synchronize()
+    #     end_time = time.time()
 
-    print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
-    print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
+    # print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
+    # print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
 
-    model = MultiHeadParametricFNO(
-        n_params=n_para,
-        param_embedding_dim=param_embedding_dim,
-        fno_modes=fno_modes,
-        fno_hidden_channels=fno_hidden_channels,
-        in_channels=1,
-        n_heads=n_rdc_coeffs,
-        n_layers=n_layers,
-        shared_out_channels=shared_out_channels
-    ).to("cpu")
-    ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
-    sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
-    model.load_state_dict(sd, strict=False)
-    model.eval().to("cpu")
+    # model = MultiHeadParametricFNO(
+    #     n_params=n_para,
+    #     param_embedding_dim=param_embedding_dim,
+    #     fno_modes=fno_modes,
+    #     fno_hidden_channels=fno_hidden_channels,
+    #     in_channels=1,
+    #     n_heads=n_rdc_coeffs,
+    #     n_layers=n_layers,
+    #     shared_out_channels=shared_out_channels
+    # ).to("cpu")
+    # ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
+    # sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
+    # model.load_state_dict(sd, strict=False)
+    # model.eval().to("cpu")
 
-    # --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
-    L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
-    dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
-    dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
+    # # --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
+    # L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
+    # dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
+    # dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
 
-    # ts = torch.jit.trace(model, (dummy_params, dummy_grid))
+    # # ts = torch.jit.trace(model, (dummy_params, dummy_grid))
 
-    with torch.no_grad():
-        ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
+    # with torch.no_grad():
+    #     ts = torch.jit.trace(model, (dummy_params, dummy_grid), check_trace=False)
 
-    ts.save(network_path_ts)
+    # ts.save(network_path_ts)
     
 
 # mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')

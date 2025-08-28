@@ -38,7 +38,7 @@ bs_params = {
 n_w = 12
 w_vec = np.linspace(w_range[0], w_range[1], n_w)
 
-_, _, _, _, n_seal, _, _, _, _, _, _, _, _, _, _, _, _, _, seals = rotor_import(file_path=rotor_file,sheet_name=rotor_sheet,bs_params=bs_params)
+_, _, _, _, _, n_seal, _, _, _, _, _, _, _, _, _, _, _, _, _, seals = rotor_import(file_path=rotor_file,sheet_name=rotor_sheet,bs_params=bs_params)
 
 
 ## initialize seal

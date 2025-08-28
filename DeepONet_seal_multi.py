@@ -190,7 +190,6 @@ for mat_file in mat_files:
     # Torch 텐서로 변환
     X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
     y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
-    # y_tensor = torch.tensor(y_scaled, dtype=torch.float32).unsqueeze(1)
     grid_tensor = torch.tensor(grid, dtype=torch.float32)
 
     # 데이터셋 및 데이터로더 생성
@@ -341,155 +340,140 @@ for mat_file in mat_files:
         "scalers_y_std":  [s.scale_.ravel() for s in scalers_y],
     }
     torch.save(ckpt, network_path)
-
-    # --- Evaluate ---
-    model.eval() # 모델을 추론 모드로 바꿈
-
-    n_test_samples = len(test_dataset.indices)
-    test_params = X_tensor[test_dataset.indices].to(device)
-    grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
-
-    with torch.no_grad(): # 예측하는 부분인듯
-        preds_scaled = model(test_params, grid_repeated).cpu().numpy()
-        targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
-
-    preds_tmp, targets_tmp = [], []
-    for i in range(n_rdc_coeffs):
-        preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
-        targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
-
-    preds_orig   = np.stack(preds_tmp,   axis=1)
-    targets_orig = np.stack(targets_tmp, axis=1)
-
-    # 샘플 시각화
-    import matplotlib.colors as mcolors
-    mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
     
-    rdc_labels = ['c',]
-    rdc_units = ['N s/m',]
-        
-    # n_plot = 4
-    
-    # j = 0  # 보고 싶은 계수 인덱스 (0~n_rdc_coeffs-1)
-    # fig, ax = plt.subplots(figsize=(8, 6))
-
-    # for idx in range(n_plot):
-    #     color = mcolors_list[idx % len(mcolors_list)]
-    #     # ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-',
-    #     #         label=f"True, #{test_dataset.indices[idx]}")
-    #     ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3,
-    #             label=f"Pred, #{test_dataset.indices[idx]}")
-
-    # ax.set_xlabel("Rotational speed [rad/s]")
-    # ax.set_ylabel(rdc_units[j])
-    # ax.set_title(rdc_labels[j])
-    # ax.grid(True)
-    # # 필요하면 legend 추가
-    # ax.legend(ncol=2, fontsize=8)
-
-    # plt.tight_layout()
-    # plt.show()
-    
-
-    rdc_labels = ['C', 'c', 'K', 'k']
-    rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
-        
-    n_plot = 4
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.flatten()  # 2D -> 1D 배열로 변환
-
-    for j in range(n_rdc_coeffs):
-        ax = axes[j]
-        for idx in range(n_plot):
-            color = mcolors_list[idx % len(mcolors_list)]
-            ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
-                    label=f"True, #{test_dataset.indices[idx]}")
-            ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
-                    label=f"Pred, #{test_dataset.indices[idx]}")
-        ax.set_xlabel('Rotational speed [rad/s]')
-        ax.set_ylabel(f"{rdc_units[j]}")
-        ax.set_title(f"{rdc_labels[j]}")
-        ax.grid(True)
-        ax.legend()
-
-    plt.tight_layout(rect=(0, 0.03, 1, 0.96))
-    plt.show()
-
-    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-
-    for coeff_idx, label in enumerate(rdc_labels):
-        y_true = np.ravel(targets_orig[:, coeff_idx, :])
-        y_pred = np.ravel(preds_orig[:, coeff_idx, :])
-
-        mse = mean_squared_error(y_true, y_pred)
-        rmse = np.sqrt(mse)
-        mae = mean_absolute_error(y_true, y_pred)
-        r2 = r2_score(y_true, y_pred)
-        yrng = (y_true.max() - y_true.min())
-        rrmse = rmse / (yrng + 1e-12)
-        mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
-
-        print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
-            f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
-
-    # 전체 지표
-    y_true_all = np.ravel(targets_orig)
-    y_pred_all = np.ravel(preds_orig)
-    mse = mean_squared_error(y_true_all, y_pred_all)
-    rmse = np.sqrt(mse)
-    mae = mean_absolute_error(y_true_all, y_pred_all)
-    r2 = r2_score(y_true_all, y_pred_all)
-    yrng = (y_true_all.max() - y_true_all.min())
-    rrmse = rmse / (yrng + 1e-12)
-    mape = np.mean(np.abs((y_true_all - y_pred_all) / (np.abs(y_true_all) + 1e-12)))
-
-    print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
-        f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
-
-    import time
-
-    test_params = X_tensor[test_dataset.indices].to(device)
-    test_targets = y_tensor[test_dataset.indices].to(device)
-    grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
-
-    # 예측 시간 측정
-    with torch.no_grad():
-        torch.cuda.synchronize()  # GPU 시간 측정 전 동기화
-        start_time = time.time()
-
-        preds_scaled = model(test_params, grid_repeated)
-
-        torch.cuda.synchronize()
-        end_time = time.time()
-
-    print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
-    print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
-    
+    ## save torch script
     import copy
     model_cpu = copy.deepcopy(model).eval().to("cpu")
 
-    # model = MultiHeadDeepONet(
-    #     n_params=n_para,
-    #     param_embedding_dim=param_embedding_dim,
-    #     hidden_channels=hidden_channels,
-    #     n_heads=n_rdc_coeffs,
-    #     n_layers=n_layers,
-    #     n_basis=shared_out_channels,   # 기존 shared_out_channels를 기저 개수로 사용
-    #     p_drop=p_drop,
-    # ).to("cpu")
-    # ckpt = torch.load(network_path, map_location="cpu", weights_only=False)
-    # sd = ckpt.get("state_dict", ckpt); sd.pop("_metadata", None)
-    # model.load_state_dict(sd, strict=False)
-    # model.eval().to("cpu")
-
-    # --- TorchScript trace (fix TracingCheckError by disabling graph re-check) ---
     L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
     dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
     dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
-
-    # ts = torch.jit.trace(model, (dummy_params, dummy_grid))
 
     with torch.no_grad():
         ts = torch.jit.trace(model_cpu, (dummy_params, dummy_grid), check_trace=False)
 
     ts.save(network_path_ts)
+
+    # # --- Evaluate ---
+    # model.eval() # 모델을 추론 모드로 바꿈
+
+    # n_test_samples = len(test_dataset.indices)
+    # test_params = X_tensor[test_dataset.indices].to(device)
+    # grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
+
+    # with torch.no_grad(): # 예측하는 부분인듯
+    #     preds_scaled = model(test_params, grid_repeated).cpu().numpy()
+    #     targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
+
+    # preds_tmp, targets_tmp = [], []
+    # for i in range(n_rdc_coeffs):
+    #     preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
+    #     targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
+
+    # preds_orig   = np.stack(preds_tmp,   axis=1)
+    # targets_orig = np.stack(targets_tmp, axis=1)
+
+    # # 샘플 시각화
+    # import matplotlib.colors as mcolors
+    # mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+    
+    # rdc_labels = ['c',]
+    # rdc_units = ['N s/m',]
+        
+    # # n_plot = 4
+    
+    # # j = 0  # 보고 싶은 계수 인덱스 (0~n_rdc_coeffs-1)
+    # # fig, ax = plt.subplots(figsize=(8, 6))
+
+    # # for idx in range(n_plot):
+    # #     color = mcolors_list[idx % len(mcolors_list)]
+    # #     # ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-',
+    # #     #         label=f"True, #{test_dataset.indices[idx]}")
+    # #     ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3,
+    # #             label=f"Pred, #{test_dataset.indices[idx]}")
+
+    # # ax.set_xlabel("Rotational speed [rad/s]")
+    # # ax.set_ylabel(rdc_units[j])
+    # # ax.set_title(rdc_labels[j])
+    # # ax.grid(True)
+    # # # 필요하면 legend 추가
+    # # ax.legend(ncol=2, fontsize=8)
+
+    # # plt.tight_layout()
+    # # plt.show()
+    
+
+    # rdc_labels = ['C', 'c', 'K', 'k']
+    # rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
+        
+    # n_plot = 4
+    # fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    # axes = axes.flatten()  # 2D -> 1D 배열로 변환
+
+    # for j in range(n_rdc_coeffs):
+    #     ax = axes[j]
+    #     for idx in range(n_plot):
+    #         color = mcolors_list[idx % len(mcolors_list)]
+    #         ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
+    #                 label=f"True, #{test_dataset.indices[idx]}")
+    #         ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
+    #                 label=f"Pred, #{test_dataset.indices[idx]}")
+    #     ax.set_xlabel('Rotational speed [rad/s]')
+    #     ax.set_ylabel(f"{rdc_units[j]}")
+    #     ax.set_title(f"{rdc_labels[j]}")
+    #     ax.grid(True)
+    #     ax.legend()
+
+    # plt.tight_layout(rect=(0, 0.03, 1, 0.96))
+    # plt.show()
+
+    # from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+    # for coeff_idx, label in enumerate(rdc_labels):
+    #     y_true = np.ravel(targets_orig[:, coeff_idx, :])
+    #     y_pred = np.ravel(preds_orig[:, coeff_idx, :])
+
+    #     mse = mean_squared_error(y_true, y_pred)
+    #     rmse = np.sqrt(mse)
+    #     mae = mean_absolute_error(y_true, y_pred)
+    #     r2 = r2_score(y_true, y_pred)
+    #     yrng = (y_true.max() - y_true.min())
+    #     rrmse = rmse / (yrng + 1e-12)
+    #     mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
+
+    #     print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+    #         f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+
+    # # 전체 지표
+    # y_true_all = np.ravel(targets_orig)
+    # y_pred_all = np.ravel(preds_orig)
+    # mse = mean_squared_error(y_true_all, y_pred_all)
+    # rmse = np.sqrt(mse)
+    # mae = mean_absolute_error(y_true_all, y_pred_all)
+    # r2 = r2_score(y_true_all, y_pred_all)
+    # yrng = (y_true_all.max() - y_true_all.min())
+    # rrmse = rmse / (yrng + 1e-12)
+    # mape = np.mean(np.abs((y_true_all - y_pred_all) / (np.abs(y_true_all) + 1e-12)))
+
+    # print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+    #     f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+
+    # import time
+
+    # test_params = X_tensor[test_dataset.indices].to(device)
+    # test_targets = y_tensor[test_dataset.indices].to(device)
+    # grid_repeated = grid_tensor.unsqueeze(0).repeat(len(test_dataset.indices), 1, 1).to(device)
+
+    # # 예측 시간 측정
+    # with torch.no_grad():
+    #     torch.cuda.synchronize()  # GPU 시간 측정 전 동기화
+    #     start_time = time.time()
+
+    #     preds_scaled = model(test_params, grid_repeated)
+
+    #     torch.cuda.synchronize()
+    #     end_time = time.time()
+
+    # print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
+    # print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
+
