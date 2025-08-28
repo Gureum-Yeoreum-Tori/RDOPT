@@ -45,7 +45,6 @@ mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
 batch_size = 2**10
 criterion = nop.losses.LpLoss(d=1, p=2)
 epochs = 5000
-# epochs = 5000
 param_embedding_dim = 2**8
 fno_modes = 4
 fno_hidden_channels = 2**6
@@ -53,7 +52,7 @@ n_layers = 3
 shared_out_channels = fno_hidden_channels
 #######
 
-lr = 1e-5
+lr = 1e-4
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 weight_decay=1e-5
@@ -132,11 +131,10 @@ for mat_file in mat_files:
 
     # 데이터 로딩 및 전처리
     with h5py.File(mat_path, 'r') as mat:
-        # inputNond: [nPara, nData] 형상 파라미터
-        input_ = np.array(mat.get('input'))
+        input_ = np.array(mat.get('input')) # real scale
 
-        w_vec = np.array(mat['params/wVec'])
-        w_min = w_vec[0,0]*30/np.pi
+        w_vec = np.array(mat['params/wVec']) # rad/sec
+        w_min = w_vec[0,0]*30/np.pi # rpm
         w_max = w_vec[0,-1]*30/np.pi
 
         rdc = np.array(mat.get('RDC'))
@@ -336,87 +334,86 @@ for mat_file in mat_files:
     torch.save(ckpt, network_path)
 
     ## save torch script
-    import copy
-    model_cpu = copy.deepcopy(model).eval().to("cpu")
-    L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
-    dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32)  # [B, n_params]
-    dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32)                     # [B, L, 1]
+    # import copy
+    # model_cpu = copy.deepcopy(model).eval().to("cpu")
+    # L = int(grid_tensor.shape[0])  # 고정 길이(트레이스 시점에 고정됨)
+    # dummy_params = torch.zeros(1, int(X_tensor.shape[1]), dtype=torch.float32).to("cpu")  # [B, n_params]
+    # dummy_grid   = torch.zeros(1, L, 1, dtype=torch.float32).to("cpu")                     # [B, L, 1]
 
-    with torch.no_grad():
-        ts = torch.jit.trace(model_cpu, (dummy_params, dummy_grid), check_trace=False)
+    # with torch.no_grad():
+    #     ts = torch.jit.trace(model_cpu, (dummy_params, dummy_grid), check_trace=False)
 
-    ts.save(network_path_ts)
+    # ts.save(network_path_ts)
     
     # --- Evaluate ---
-    # model.eval() # 모델을 추론 모드로 바꿈
+    model.eval() # 모델을 추론 모드로 바꿈
 
-    # n_test_samples = len(test_dataset.indices)
-    # test_params = X_tensor[test_dataset.indices].to(device)
-    # grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
+    n_test_samples = len(test_dataset.indices)
+    test_params = X_tensor[test_dataset.indices].to(device)
+    grid_repeated = grid_tensor.unsqueeze(0).repeat(n_test_samples, 1, 1).to(device)
 
-    # with torch.no_grad(): # 예측하는 부분인듯
-    #     preds_scaled = model(test_params, grid_repeated).cpu().numpy()
-    #     targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
+    with torch.no_grad(): # 예측하는 부분인듯
+        preds_scaled = model(test_params, grid_repeated).cpu().numpy()
+        targets_scaled = y_tensor[test_dataset.indices].cpu().numpy()
 
-    # preds_tmp, targets_tmp = [], []
-    # for i in range(n_rdc_coeffs):
-    #     preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
-    #     targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
+    preds_tmp, targets_tmp = [], []
+    for i in range(n_rdc_coeffs):
+        preds_tmp.append(  scalers_y[i].inverse_transform(preds_scaled[:, i, :]) )
+        targets_tmp.append(scalers_y[i].inverse_transform(targets_scaled[:, i, :]) )
 
-    # preds_orig   = np.stack(preds_tmp,   axis=1)
-    # targets_orig = np.stack(targets_tmp, axis=1)
+    preds_orig   = np.stack(preds_tmp,   axis=1)
+    targets_orig = np.stack(targets_tmp, axis=1)
 
-    # 샘플 시각화
-    # import matplotlib.colors as mcolors
-    # mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
-    # # mcolors_list = list(mcolors.CSS4_COLORS.values())  # HEX 값 리스트
-    # # rdc_labels = ['K', 'k', 'C', 'c', 'M', 'm']
-    # # rdc_units = ['N/m', 'N/m', 'N s/m', 'N s/m', 'kg', 'kg']
+    # Visualize
+    # cases
+    import matplotlib.colors as mcolors
+    mcolors_list = list(mcolors.TABLEAU_COLORS.values())  # HEX 값 리스트
+    
     # rdc_labels = ['M', 'm', 'C', 'c', 'K', 'k']
     # rdc_units = ['kg', 'kg','N s/m', 'N s/m', 'N/m', 'N/m']
+    
+    rdc_labels = ['C', 'c', 'K', 'k']
+    rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
         
-    # n_plot = 8
-    # fig, axes = plt.subplots(3, 2, figsize=(14, 10))
-    # axes = axes.flatten()  # 2D -> 1D 배열로 변환
+    n_plot = 8
+    fig, axes = plt.subplots(3, 2, figsize=(14, 10))
+    axes = axes.flatten()  # 2D -> 1D 배열로 변환
 
-    # for j in range(n_rdc_coeffs):
-    #     ax = axes[j]
-    #     for idx in range(n_plot):
-    #         color = mcolors_list[idx % len(mcolors_list)]
-    #         ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
-    #                 label=f"True, #{test_dataset.indices[idx]}")
-    #         ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
-    #                 label=f"Pred, #{test_dataset.indices[idx]}")
-    #     ax.set_xlabel('Rotational speed [rad/s]')
-    #     ax.set_ylabel(f"{rdc_units[j]}")
-    #     ax.set_title(f"{rdc_labels[j]}")
-    #     ax.grid(True)
-    #     # ax.legend()
+    for j in range(n_rdc_coeffs):
+        ax = axes[j]
+        for idx in range(n_plot):
+            color = mcolors_list[idx % len(mcolors_list)]
+            ax.plot(w, targets_orig[idx, j, :], color=color, linestyle='-', 
+                    label=f"True, #{test_dataset.indices[idx]}")
+            ax.plot(w, preds_orig[idx, j, :], color=color, linestyle='--', marker='o', markersize=3, 
+                    label=f"Pred, #{test_dataset.indices[idx]}")
+        ax.set_xlabel('Rotational speed [rad/s]')
+        ax.set_ylabel(f"{rdc_units[j]}")
+        ax.set_title(f"{rdc_labels[j]}")
+        ax.grid(True)
+        ax.legend()
 
-    # plt.tight_layout(rect=(0, 0.03, 1, 0.96))
-    # plt.show()
+    plt.tight_layout(rect=(0, 0.03, 1, 0.96))
+    plt.show()
 
-    # from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+    # all
+    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+    for coeff_idx, label in enumerate(rdc_labels):
+        y_true = np.ravel(targets_orig[:, coeff_idx, :])
+        y_pred = np.ravel(preds_orig[:, coeff_idx, :])
 
-    # for coeff_idx, label in enumerate(rdc_labels):
-    #     y_true = np.ravel(targets_orig[:, coeff_idx, :])
-    #     y_pred = np.ravel(preds_orig[:, coeff_idx, :])
+        mse = mean_squared_error(y_true, y_pred)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(y_true, y_pred)
+        r2 = r2_score(y_true, y_pred)
+        yrng = (y_true.max() - y_true.min())
+        rrmse = rmse / (yrng + 1e-12)
+        mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
 
-    #     mse = mean_squared_error(y_true, y_pred)
-    #     rmse = np.sqrt(mse)
-    #     mae = mean_absolute_error(y_true, y_pred)
-    #     r2 = r2_score(y_true, y_pred)
-    #     yrng = (y_true.max() - y_true.min())
-    #     rrmse = rmse / (yrng + 1e-12)
-    #     mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
-
-    #     print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
-    #         f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+        print(f"[{label}] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+            f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
         
-        
-    # rdc_labels = ['C', 'c', 'K', 'k']
-    # rdc_units = ['N s/m', 'N s/m', 'N/m', 'N/m']
-        
+
     # n_plot = 48
     # fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     # axes = axes.flatten()  # 2D -> 1D 배열로 변환
