@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from import_data import rotor_import, calculate_bearing_loads
-from loader_brg_seal import BearingH5Loader, SealDONModel, SealLeakModel
+from loader_brg_seal import BearingNondModel, SealDONModel, SealLeakModel
 from collections import defaultdict
 from solver_seal import main_seal_solver as seal_solver
 import torch
@@ -48,8 +48,6 @@ seal_leak = SealLeakModel()
 groups = defaultdict(list)          # {SealNet: [원본 인덱스,...]}
 for i, s in enumerate(seals):
     groups[s.SealNet].append(i)
-outputs = [None] * len(seals)  # 원래 순서로 채울 버퍼
-
 
 ## Optimization
 n_types = 3

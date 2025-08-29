@@ -77,6 +77,7 @@ for model_id, filename in mat_files.items():
     plt.show()
 
     err1 = np.mean((rdc_true - rdc_pred_fno) / (rdc_true + 1e-12) * 100, axis=2)
+    err1 = np.max(np.abs(rdc_true - rdc_pred_fno), axis=2)
     fig, axes = plt.subplots(2, 2, figsize=(8,6), sharex=True)
     axes = axes.ravel()
     
@@ -94,6 +95,7 @@ for model_id, filename in mat_files.items():
     plt.show()
     
     err2 = np.mean((rdc_true - rdc_pred_don) / (rdc_true + 1e-12) * 100, axis=2)
+    err2 = np.max(np.abs(rdc_true - rdc_pred_don), axis=2)
     fig, axes = plt.subplots(2, 2, figsize=(8,6), sharex=True)
     axes = axes.ravel()
     

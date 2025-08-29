@@ -65,13 +65,13 @@ class MultiHeadDeepONet(nn.Module):
     출력:  [B, n_heads, n_vel]
     """
     def __init__(self,
-                 n_params: int,
-                 param_embedding_dim: int,
-                 hidden_channels: int,
-                 n_heads: int,
-                 n_layers: int,
-                 n_basis: int,
-                 p_drop: float):
+                n_params: int,
+                param_embedding_dim: int,
+                hidden_channels: int,
+                n_heads: int,
+                n_layers: int,
+                n_basis: int,
+                p_drop: float):
         super().__init__()
         self.n_heads = n_heads
         self.n_basis = n_basis
