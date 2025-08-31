@@ -4,7 +4,6 @@ import numpy as np
 from import_data import rotor_import
 from loader_brg_seal import BearingNondModel, SealFNOModel, SealDONModel, SealLeakModel
 from collections import defaultdict
-from torch.linalg import inv
 import torch
 import matplotlib.pyplot as plt
 from solver_rotordyn import assemble_system_matrix
@@ -24,6 +23,8 @@ from pymoo.core.repair import Repair
 from pymoo.operators.sampling.rnd import IntegerRandomSampling
 from pymoo.operators.crossover.pntx import TwoPointCrossover
 from pymoo.operators.mutation.pm import PolynomialMutation
+from pymoo.core.callback import Callback
+import pickle
 
 ##
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -43,7 +44,7 @@ bs_params = {
     }
 
 n_w = 14
-n_pop = 100
+n_pop = 200
 w_vec = np.linspace(w_range[0], w_range[1], n_w)
 
 ## Import and generate rotor data
@@ -137,6 +138,75 @@ LB_psr = 0;  UB_psr = 10   # -> *0.1 해서 [0,1.0]
 n_var = 2*n_brg + 3 * n_seal
 n_objs = 5  # [total_leak, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSeal]
 
+class TimerCheckpointCallback(Callback):
+    def __init__(self, out_dir: str = "checkpoints", freq: int = 5, save_pickle: bool = False):
+        super().__init__()
+        self.prev_time = None
+        self.out_dir = out_dir
+        self.freq = max(1, int(freq))
+        self.save_pickle = save_pickle
+        os.makedirs(self.out_dir, exist_ok=True)
+
+    def _save_npz(self, algorithm):
+        try:
+            gen = int(getattr(algorithm, "n_gen", -1))
+            pop_X = algorithm.pop.get("X") if algorithm.pop is not None else None
+            pop_F = algorithm.pop.get("F") if algorithm.pop is not None else None
+            pop_CV = algorithm.pop.get("CV") if algorithm.pop is not None else None
+            opt_X = algorithm.opt.get("X") if getattr(algorithm, "opt", None) is not None else None
+            opt_F = algorithm.opt.get("F") if getattr(algorithm, "opt", None) is not None else None
+            path = os.path.join(self.out_dir, f"gen_{gen:04d}.npz")
+            np.savez_compressed(
+                path,
+                gen=gen,
+                pop_X=pop_X,
+                pop_F=pop_F,
+                pop_CV=pop_CV,
+                opt_X=opt_X,
+                opt_F=opt_F,
+                time=time.time(),
+            )
+            # also save/overwrite a quick pointer to the latest state
+            latest = os.path.join(self.out_dir, "latest.npz")
+            np.savez_compressed(
+                latest,
+                gen=gen,
+                pop_X=pop_X,
+                pop_F=pop_F,
+                pop_CV=pop_CV,
+                opt_X=opt_X,
+                opt_F=opt_F,
+                time=time.time(),
+            )
+        except Exception as e:
+            print(f"[checkpoint] Failed to save npz: {e}")
+
+    def _save_pickle(self, algorithm):
+        if not self.save_pickle:
+            return
+        try:
+            gen = int(getattr(algorithm, "n_gen", -1))
+            path = os.path.join(self.out_dir, f"algorithm_gen_{gen:04d}.pkl")
+            with open(path, "wb") as f:
+                pickle.dump(algorithm, f)
+        except Exception as e:
+            # Some algorithm objects may not be fully picklable; ignore failures.
+            print(f"[checkpoint] Pickle save skipped/failed: {e}")
+
+    def notify(self, algorithm):
+        # timing log
+        now = time.time()
+        if self.prev_time is not None:
+            elapsed = now - self.prev_time
+            print(f"Gen {algorithm.n_gen} elapsed: {elapsed:.3f} sec")
+        self.prev_time = now
+
+        # periodic checkpoint
+        gen = int(getattr(algorithm, "n_gen", 0) or 0)
+        if gen % self.freq == 0:
+            self._save_npz(algorithm)
+            self._save_pickle(algorithm)
+        
 class RoundRepair(Repair):
     def _do(self, problem, X, **kwargs):
         # 경계+정수 보정
@@ -249,9 +319,9 @@ class RotordynamicProblem(Problem):
         w = w_vec
         for p in range(pop):
             af_p = 0.0
-            A = amp[p, :, cal_nodes]  # [n_w, n_cal]
+            A = amp[p, :, cal_nodes]  # [n_cal, n_w] due to fancy indexing
             for c in range(len(cal_nodes)):
-                y = A[:, c]
+                y = A[c, :]
                 if y.size < 3:
                     continue
                 pk, _ = find_peaks(y)
@@ -352,8 +422,6 @@ crossover = TwoPointCrossover()
 mutation = PolynomialMutation(eta=20)
 repair = RoundRepair()
 
-
-n_pop = 200
 algorithm = NSGA2(
     pop_size=n_pop,
     sampling=sampling,
@@ -373,6 +441,7 @@ res = minimize(
     problem,
     algorithm,
     termination,
+    callback=TimerCheckpointCallback(out_dir="checkpoints", freq=5, save_pickle=False),
     seed=42,
     save_history=True,
     verbose=True
@@ -478,7 +547,7 @@ for p in range(pop):
     af_p = 0.0
     A = amp[p, :, cal_nodes]  # [n_w, n_cal]
     for c in range(A.shape[1]):
-        y = A[:, c]
+        y = A[c, :]
         if y.size < 3:
             continue
         # SciPy peak detection (indices)
@@ -575,6 +644,11 @@ else:
 t_end = time.time()
 t_elapsed = t_end - t_start
 print(f"elapsed time: ",t_elapsed)
+
+#%%
+# d = np.load('checkpoints/latest.npz')
+# X_pop, F_pop = d['pop_X'], d['pop_F']
+# X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
 
 #%%
