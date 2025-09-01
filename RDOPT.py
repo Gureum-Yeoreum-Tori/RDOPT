@@ -27,7 +27,7 @@ from pymoo.core.callback import Callback
 import pickle
 
 ##
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
 #%%
 ## Define constant values
@@ -84,8 +84,8 @@ f_brg_dim = np.array([[1, 1e-4],[1, 1e-4]])
 
 ## Load seal model
 # seal = SealFNOModel()
-model_seal = SealDONModel()
-model_seal_leak = SealLeakModel()
+model_seal = SealDONModel(device=device)
+model_seal_leak = SealLeakModel(device=device)
 
 ## seal property prediction function
 # --- input: Seal geometric parameters, w_vec
@@ -297,7 +297,7 @@ class RotordynamicProblem(Problem):
         # 5) max seal amplitude ratio (% of min clearance)
 
         # Operating index
-        idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
+        # idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
 
         # 1) Total seal leakage per individual (sum across all seals)
         F[:, 0] = seal_leak.sum(axis=1)
@@ -460,6 +460,83 @@ print(f"elapsed time: ",t_elapsed)
 d = np.load('checkpoints/latest.npz')
 X_pop, F_pop = d['pop_X'], d['pop_F']
 X_pareto, F_pareto = d['opt_X'], d['opt_F']
+
+
+
+
+
+
+
+
+#%%
+# gpu test
+t_start = time.time()
+
+X = np.array([np.concatenate([np.tile([21, 15],2), np.tile([200, 200, 0], n_seal)]), 
+np.concatenate([np.tile([21, 15],2), np.tile([200, 200, 0], n_seal)])])
+
+X = np.repeat(X, 200, axis=0)
+
+pop = X.shape[0]
+
+X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
+X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
+
+F = np.zeros((pop, n_objs), dtype=float) # objective function value
+
+# x_brg = X_brg * f_brg_dim
+# K_brg, C_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
+device_test = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+
+model_seal = SealDONModel(device=device_test)
+model_seal_leak = SealLeakModel(device=device_test)
+
+seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
+seal_leak = np.zeros((pop, n_seal), dtype=float)
+t0 = time.time()
+for t in range(n_type_seal):
+    idx = idx_seal[t]
+    if len(idx) == 0:
+        continue
+    
+    params_t = X_seal[:, idx]
+    x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
+    
+    leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
+    rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
+    
+    seal_leak[:, idx] = leak_flat
+    seal_rdc[:, idx] = rdc_flat
+t1 = time.time()
+elapsed = t1 - t0
+print(f"{elapsed:.2f} sec elapsed using",device_test)
+
+
+
+
+device_test = 'cpu'
+model_seal = SealDONModel(device=device_test)
+model_seal_leak = SealLeakModel(device=device_test)
+
+seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
+seal_leak = np.zeros((pop, n_seal), dtype=float)
+t0 = time.time()
+for t in range(n_type_seal):
+    idx = idx_seal[t]
+    if len(idx) == 0:
+        continue
+    
+    params_t = X_seal[:, idx]
+    x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
+    
+    leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
+    rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
+    
+    seal_leak[:, idx] = leak_flat
+    seal_rdc[:, idx] = rdc_flat
+t1 = time.time()
+elapsed = t1 - t0
+print(f"{elapsed:.2f} sec elapsed using",device_test)
 
 
 
