@@ -24,6 +24,9 @@ from pymoo.operators.sampling.rnd import IntegerRandomSampling
 from pymoo.operators.crossover.pntx import TwoPointCrossover
 from pymoo.operators.mutation.pm import PolynomialMutation
 from pymoo.core.callback import Callback
+from pymoo.util.display.output import Output
+from pymoo.util.display.column import Column
+
 import pickle
 
 ##
@@ -46,13 +49,15 @@ bs_params = {
 
 n_w = 12
 n_pop = 200
-n_max_gen = 10
+n_max_gen = 400
 w_vec = np.linspace(w_range[0], w_range[1], n_w)
 
 ## Import and generate rotor data
 data_dir = 'dataset/data'
 rotor_file = os.path.join(data_dir, "input_Optim_Rotor.xlsx")
 rotor_sheet = "RDOPT"
+
+print("Importing rotor data...")
 
 n_ele, n_node, n_dof, n_add, n_brg, n_seal, rotor_elements, rotor_nodal_props, added_elements, added_props, mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb, brgs, seals, support_dofs = rotor_import(file_path=rotor_file,sheet_name=rotor_sheet,bs_params=bs_params)
 
@@ -64,7 +69,9 @@ matrix_params = {
     'n_node': n_node,
     'n_dof': n_dof,
 }
+print("Rotor data loaded >.<\n")
 
+print("Loading bearing and seal models...")
 ## Load brg model
 model_brg = BearingNondModel()
 f_brg_dim = np.array([[1, 1e-4],[1, 1e-4]])
@@ -94,6 +101,8 @@ model_seal_leak = SealLeakModel(device=device)
 # --- output: leakage flow rate and rotordynamic coefficient
 # leakage flow rate shape = (n_pop*n_seal, 1)
 # rotordynamic coefficient = (n_pop*n_seal, 4, n_w), order = [C c K k]
+print("Bearing and Seal models loaded\n")
+
 
 n_type_seal = 3 # seal types
 
@@ -119,7 +128,7 @@ rdc_signs = np.array([1, 1, -1, 1])
 # K_seal = rdc_flat[:,:,[2, 3, 3, 2],:] * rdc_signs[None, None, :, None]
 
 #%%
-
+print("Defining optimization problem...")
 ## prepare rotordynamic analysis
 # --- input: mass, damping, stiffness matrix, w_vec, harmonic excitation cases
 # --- output: critical speed, logarithmic decrement, damping ratio, unbalanced response,
@@ -140,6 +149,37 @@ LB_psr = -10;  UB_psr = 10   # -> *0.1 해서 [0,1.0]
 n_var = 2 * n_brg + 3 * n_seal
 n_objs = 5  # [total_leak, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSeal]
 
+# class Output_re(Output):
+#     def __init__(self):
+#         super().__init__()
+#         # self.x_mean = Column("x_mean", width=14)
+#         # self.x_std = Column("x_std", width=14)
+#         self.col_nds = Column("n_gen", width=8)
+#         self.col_nds = Column("n_nds", width=8)
+#         self.cur_time  = Column("t_cur_gen [s]", width=14)
+#         self.elapsed_time  = Column("t_elapsed [s]", width=14)
+        
+#         self.columns += [self.x_mean, self.x_std, self.cur_time, self.elapsed_time]
+
+#         self.start_time = time.time()
+#         self.prev_time  = self.start_time
+
+#     def update(self, algorithm):
+#         super().update(algorithm)
+        
+#         now = time.time()
+#         dt_gen   = now - self.prev_time
+#         t_total  = now - self.start_time
+#         self.prev_time = now
+        
+#         X = algorithm.pop.get("X")
+        
+#         self.x_mean.set(f"{np.mean(X):>14.6E}")
+#         self.x_std.set( f"{np.std(X):>14.6E}")
+#         self.cur_time.set( f"{dt_gen:>14.2f}")
+#         self.elapsed_time.set( f"{t_total:>14.2f}")
+        
+        
 class TimerCheckpointCallback(Callback):
     def __init__(self, out_dir: str = "checkpoints", freq: int = 5, save_pickle: bool = False):
         super().__init__()
@@ -166,7 +206,7 @@ class TimerCheckpointCallback(Callback):
                 pop_CV=pop_CV,
                 opt_X=opt_X,
                 opt_F=opt_F,
-                time=time.time(),
+                # time=time.time(),
             )
             # also save/overwrite a quick pointer to the latest state
             latest = os.path.join(self.out_dir, "latest.npz")
@@ -178,7 +218,7 @@ class TimerCheckpointCallback(Callback):
                 pop_CV=pop_CV,
                 opt_X=opt_X,
                 opt_F=opt_F,
-                time=time.time(),
+                # time=time.time(),
             )
         except Exception as e:
             print(f"[checkpoint] Failed to save npz: {e}")
@@ -434,32 +474,46 @@ algorithm = NSGA2(
     repair=repair
 )
 
-termination = get_termination("n_gen", n_max_gen)
-problem = RotordynamicProblem()
+# termination = get_termination("n_gen", 200) 
+termination = get_termination("moo", ftol=0.0025, period=30)
 
+
+# from pymoo.core.termination import TerminateIfAny
+# from pymoo.termination.default import DefaultMultiObjectiveTermination
+# from pymoo.termination.max_time import TimeBasedTermination
+
+
+# termination = TerminateIfAny(DefaultMultiObjectiveTermination(), TimeBasedTermination(0.2))
+
+
+problem = RotordynamicProblem()
+print("Done >.<\n\n\n")
 #%%
+
+print("Starting optimization...")
 t_start = time.time()
 
 res = minimize(
     problem,
     algorithm,
     termination,
-    callback=TimerCheckpointCallback(out_dir="checkpoints", freq=5, save_pickle=False),
+    # output=Output_re(),
     seed=42,
     save_history=True,
-    verbose=True
+    verbose=True,
+    callback=TimerCheckpointCallback(),
 )
 
 t_end = time.time()
 t_elapsed = t_end - t_start
-print(f"n_pop = ",n_pop)
-print(f"elapsed time: ",t_elapsed)
+print("Optimization completed!")
+print("elapsed time =",f"{t_elapsed:.2f}","sec\n")
 
 
 #%%
-d = np.load('checkpoints/latest.npz')
-X_pop, F_pop = d['pop_X'], d['pop_F']
-X_pareto, F_pareto = d['opt_X'], d['opt_F']
+# d = np.load('checkpoints/latest.npz')
+# X_pop, F_pop = d['pop_X'], d['pop_F']
+# X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
 
 
@@ -469,74 +523,74 @@ X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
 
 #%%
-# gpu test
-t_start = time.time()
+# # gpu test
+# t_start = time.time()
 
-X = np.array([np.concatenate([np.tile([21, 15],2), np.tile([200, 200, 0], n_seal)]), 
-np.concatenate([np.tile([21, 15],2), np.tile([200, 200, 0], n_seal)])])
+# X = np.array([np.concatenate([np.tile([21, 15],2), np.tile([200, 200, 0], n_seal)]), 
+# np.concatenate([np.tile([21, 15],2), np.tile([200, 200, 0], n_seal)])])
 
-X = np.repeat(X, 200, axis=0)
+# X = np.repeat(X, 200, axis=0)
 
-pop = X.shape[0]
+# pop = X.shape[0]
 
-X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
-X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
+# X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
+# X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
 
-F = np.zeros((pop, n_objs), dtype=float) # objective function value
+# F = np.zeros((pop, n_objs), dtype=float) # objective function value
 
-# x_brg = X_brg * f_brg_dim
-# K_brg, C_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
-device_test = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+# # x_brg = X_brg * f_brg_dim
+# # K_brg, C_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
+# device_test = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
-model_seal = SealDONModel(device=device_test)
-model_seal_leak = SealLeakModel(device=device_test)
+# model_seal = SealDONModel(device=device_test)
+# model_seal_leak = SealLeakModel(device=device_test)
 
-seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
-seal_leak = np.zeros((pop, n_seal), dtype=float)
-t0 = time.time()
-for t in range(n_type_seal):
-    idx = idx_seal[t]
-    if len(idx) == 0:
-        continue
+# seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
+# seal_leak = np.zeros((pop, n_seal), dtype=float)
+# t0 = time.time()
+# for t in range(n_type_seal):
+#     idx = idx_seal[t]
+#     if len(idx) == 0:
+#         continue
     
-    params_t = X_seal[:, idx]
-    x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
+#     params_t = X_seal[:, idx]
+#     x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
     
-    leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
-    rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
+#     leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
+#     rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
     
-    seal_leak[:, idx] = leak_flat
-    seal_rdc[:, idx] = rdc_flat
-t1 = time.time()
-elapsed = t1 - t0
-print(f"{elapsed:.2f} sec elapsed using",device_test)
+#     seal_leak[:, idx] = leak_flat
+#     seal_rdc[:, idx] = rdc_flat
+# t1 = time.time()
+# elapsed = t1 - t0
+# print(f"{elapsed:.2f} sec elapsed using",device_test)
 
 
 
 
-device_test = 'cpu'
-model_seal = SealDONModel(device=device_test)
-model_seal_leak = SealLeakModel(device=device_test)
+# device_test = 'cpu'
+# model_seal = SealDONModel(device=device_test)
+# model_seal_leak = SealLeakModel(device=device_test)
 
-seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
-seal_leak = np.zeros((pop, n_seal), dtype=float)
-t0 = time.time()
-for t in range(n_type_seal):
-    idx = idx_seal[t]
-    if len(idx) == 0:
-        continue
+# seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
+# seal_leak = np.zeros((pop, n_seal), dtype=float)
+# t0 = time.time()
+# for t in range(n_type_seal):
+#     idx = idx_seal[t]
+#     if len(idx) == 0:
+#         continue
     
-    params_t = X_seal[:, idx]
-    x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
+#     params_t = X_seal[:, idx]
+#     x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
     
-    leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
-    rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
+#     leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
+#     rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
     
-    seal_leak[:, idx] = leak_flat
-    seal_rdc[:, idx] = rdc_flat
-t1 = time.time()
-elapsed = t1 - t0
-print(f"{elapsed:.2f} sec elapsed using",device_test)
+#     seal_leak[:, idx] = leak_flat
+#     seal_rdc[:, idx] = rdc_flat
+# t1 = time.time()
+# elapsed = t1 - t0
+# print(f"{elapsed:.2f} sec elapsed using",device_test)
 
 
 
