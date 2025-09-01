@@ -1,3 +1,4 @@
+#%%
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -5,7 +6,7 @@ import matplotlib.pyplot as plt
 from import_data import rotor_import
 from loader_brg_seal import BearingNondModel, SealFNOModel, SealDONModel, SealLeakModel
 from solver_rotordyn import assemble_system_matrix
-from solver_rotordyn import eig_batch_cpu_parallel
+from solver_rotordyn import eig_batch
 from solver_rotordyn import eig_batch_with_vectors
 
 
@@ -229,8 +230,8 @@ K_all, Ceff_all = assemble_system_matrix(
 )
 
 # Eigen without/with tracking
-eig_pre  = eig_batch_cpu_parallel(mat_M, K_all, Ceff_all, track=False, w_max=w_vec[-1])
-eig_post, _ = eig_batch_with_vectors(mat_M, K_all, Ceff_all, track=True, w_max=w_vec[-1])
+eig_pre, _  = eig_batch(mat_M, K_all, Ceff_all, track=False)
+eig_post, _ = eig_batch(mat_M, K_all, Ceff_all, track=True)
 
 # Campbell comparison: pick n modes with smallest |Imag(λ)| from forward branch
 n_eff = eig_pre.shape[2]
@@ -244,8 +245,8 @@ idx_plot = np.argsort(score_pre)[:n_pick]
 rpm = w_vec * 30.0 / np.pi
 plt.figure(figsize=(8, 5))
 for k in idx_plot:
-    plt.plot(rpm, beta_pre[:, k] * 30.0 / np.pi, '--', alpha=0.6)
-    plt.plot(rpm, beta_post[:, k] * 30.0 / np.pi, '-')
+    plt.plot(rpm, beta_pre[:, k] * 30.0 / np.pi, '--')
+    plt.plot(rpm, beta_post[:, k] * 30.0 / np.pi, '-', linewidth = 2, alpha=0.6)
 plt.plot(rpm, rpm, 'k-')
 plt.xlabel('Speed [RPM]')
 plt.ylabel('Modal Frequency [RPM]')
@@ -256,44 +257,45 @@ plt.tight_layout()
 # plt.savefig(os.path.join(out_dir, 'campbell_compare.png'), dpi=150)
 # plt.close()
 
-# Mode shapes: use tracked vectors at a chosen speed (e.g., mid speed)
-eigvals_trk, phi_fwd = eig_batch_with_vectors(mat_M, K_all, Ceff_all, track=True, w_max=w_vec[-1])
-iw = n_w // 2
-Phi = phi_fwd[0, iw]  # (n, n)
+#%%
+# # Mode shapes: use tracked vectors at a chosen speed (e.g., mid speed)
+# eigvals_trk, phi_fwd = eig_batch_with_vectors(mat_M, K_all, Ceff_all, track=True, w_max=w_vec[-1]*2)
+# iw = n_w // 2
+# Phi = phi_fwd[0, iw]  # (n, n)
 
-# Node positions along axis
-vec_L = np.array([e.L for e in rotor_elements])
-z_nodes = np.concatenate(([0.0], np.cumsum(vec_L)))  # (n_node,)
+# # Node positions along axis
+# vec_L = np.array([e.L for e in rotor_elements])
+# z_nodes = np.concatenate(([0.0], np.cumsum(vec_L)))  # (n_node,)
 
-# Build node indices for x,y DOFs
-idx_x = np.arange(n_node) * 4
-idx_y = idx_x + 2
+# # Build node indices for x,y DOFs
+# idx_x = np.arange(n_node) * 4
+# idx_y = idx_x + 2
 
-# Plot first few picked modes
-# os.makedirs(out_dir, exist_ok=True)
-for i, k in enumerate(idx_plot[:min(4, len(idx_plot))]):
-    v = Phi[:, k]  # (n_dof,)
-    vx = v[idx_x]
-    vy = v[idx_y]
-    amp = np.sqrt(np.abs(vx)**2 + np.abs(vy)**2)  # magnitude along axis
-    # Normalize for visualization
-    amp = amp / (np.max(amp) + 1e-12)
-    plt.figure(figsize=(8, 3))
-    plt.plot(z_nodes, amp, 'ro-')
-    plt.xlabel('Axial Position [m]')
-    plt.ylabel('Normalized |disp|')
-    fr = np.abs(eigvals_trk[0, iw, k].imag) * 30.0 / np.pi
-    sp = float(rpm[iw])
-    plt.title(f'Mode shape (tracked) k={k}, speed={sp:.0f} RPM, freq~{fr:.0f} RPM')
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    # plt.savefig(os.path.join(out_dir, f'mode_shape_k{k}_iw{iw}.png'), dpi=150)
-    # plt.close()
+# # Plot first few picked modes
+# # os.makedirs(out_dir, exist_ok=True)
+# for i, k in enumerate(idx_plot[:min(4, len(idx_plot))]):
+#     v = Phi[:, k]  # (n_dof,)
+#     vx = v[idx_x]
+#     vy = v[idx_y]
+#     amp = np.sqrt(np.abs(vx)**2 + np.abs(vy)**2)  # magnitude along axis
+#     # Normalize for visualization
+#     amp = amp / (np.max(amp) + 1e-12)
+#     plt.figure(figsize=(8, 3))
+#     plt.plot(z_nodes, amp, 'ro-')
+#     plt.xlabel('Axial Position [m]')
+#     plt.ylabel('Normalized |disp|')
+#     fr = np.abs(eigvals_trk[0, iw, k].imag) * 30.0 / np.pi
+#     sp = float(rpm[iw])
+#     plt.title(f'Mode shape (tracked) k={k}, speed={sp:.0f} RPM, freq~{fr:.0f} RPM')
+#     plt.grid(True, alpha=0.3)
+#     plt.tight_layout()
+#     # plt.savefig(os.path.join(out_dir, f'mode_shape_k{k}_iw{iw}.png'), dpi=150)
+#     # plt.close()
 
-# print("Saved:")
-# print(" -", os.path.join(out_dir, 'campbell_compare.png'))
-# for k in idx_plot[:min(4, len(idx_plot))]:
-#     print(" -", os.path.join(out_dir, f'mode_shape_k{k}_iw{n_w//2}.png'))
+# # print("Saved:")
+# # print(" -", os.path.join(out_dir, 'campbell_compare.png'))
+# # for k in idx_plot[:min(4, len(idx_plot))]:
+# #     print(" -", os.path.join(out_dir, f'mode_shape_k{k}_iw{n_w//2}.png'))
 
 #%%
 ## end
