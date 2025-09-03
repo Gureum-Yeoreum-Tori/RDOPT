@@ -205,7 +205,7 @@ X_seal = np.tile([200, 200, 0], (n_seal, 1))[None, :, :]  # (1, n_seal, 3)
 
 # Bearing rdc
 x_brg = X_brg * f_brg_dim
-K_brg, C_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
+K_brg, C_brg, Pl = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
 
 # Seal rdc
 pop = 1

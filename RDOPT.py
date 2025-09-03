@@ -1,7 +1,7 @@
 #%%
 import os
 import numpy as np
-from import_data import rotor_import
+from import_data import rotor_import, plot_rotor_3d
 from loader_brg_seal import BearingNondModel, SealFNOModel, SealDONModel, SealLeakModel
 from collections import defaultdict
 import torch
@@ -14,6 +14,7 @@ from scipy.signal import find_peaks
 
 from pymoo.core.problem import Problem
 from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.algorithms.moo.unsga3 import UNSGA3
 from pymoo.termination import get_termination
 from pymoo.optimize import minimize
 from pymoo.core.sampling import Sampling
@@ -29,10 +30,8 @@ from pymoo.util.display.column import Column
 
 import pickle
 
-##
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
-#%%
 ## Define constant values
 w_range = np.array([1000, 6000]) * np.pi / 30
 w_oper = 3500 * np.pi / 30
@@ -49,7 +48,15 @@ bs_params = {
 
 n_w = 12
 n_pop = 200
-n_max_gen = 400
+n_max_gen = 500
+
+## Select algorithm
+
+# which_algorithm = "NSGA2"
+which_algorithm = "UNSGA3"
+
+#%%
+
 w_vec = np.linspace(w_range[0], w_range[1], n_w)
 
 ## Import and generate rotor data
@@ -61,6 +68,8 @@ print("Importing rotor data...")
 
 n_ele, n_node, n_dof, n_add, n_brg, n_seal, rotor_elements, rotor_nodal_props, added_elements, added_props, mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb, brgs, seals, support_dofs = rotor_import(file_path=rotor_file,sheet_name=rotor_sheet,bs_params=bs_params)
 
+plot_rotor_3d(rotor_elements=rotor_elements)
+
 matrix_params = {
     'mat_M': mat_M,
     'mat_K_r': mat_K_r,
@@ -71,6 +80,7 @@ matrix_params = {
 }
 print("Rotor data loaded >.<\n")
 
+#%%
 print("Loading bearing and seal models...")
 ## Load brg model
 model_brg = BearingNondModel()
@@ -102,7 +112,6 @@ model_seal_leak = SealLeakModel(device=device)
 # leakage flow rate shape = (n_pop*n_seal, 1)
 # rotordynamic coefficient = (n_pop*n_seal, 4, n_w), order = [C c K k]
 print("Bearing and Seal models loaded\n")
-
 
 n_type_seal = 3 # seal types
 
@@ -147,7 +156,7 @@ LB_psr = -10;  UB_psr = 10   # -> *0.1 해서 [0,1.0]
 
 ## Define optimization problem with vector computation
 n_var = 2 * n_brg + 3 * n_seal
-n_objs = 5  # [total_leak, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSeal]
+n_objs = 6  # [total_leak, power_loss, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSeal]
 
 # class Output_re(Output):
 #     def __init__(self):
@@ -285,7 +294,7 @@ class RotordynamicProblem(Problem):
         F = np.zeros((pop, n_objs), dtype=float) # objective function value
         
         x_brg = X_brg * f_brg_dim
-        K_brg, C_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
+        K_brg, C_brg, loss_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
         
         seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
         seal_leak = np.zeros((pop, n_seal), dtype=float)
@@ -331,16 +340,20 @@ class RotordynamicProblem(Problem):
         
         # calculate objective functions
         # 1) total seal leakage
-        # 2) maximum amplification factor (half-power method per node/peak)
-        # 3) -min log decrement across first 8 forward modes over all speeds
-        # 4) max bearing amplitude ratio (% of clearance)
-        # 5) max seal amplitude ratio (% of min clearance)
+        # 2) total bearing power loss
+        # 3) maximum amplification factor (half-power method per node/peak)
+        # 4) -min log decrement across first 8 forward modes over all speeds
+        # 5) max bearing amplitude ratio (% of clearance)
+        # 6) max seal amplitude ratio (% of min clearance)
 
         # Operating index
-        # idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
+        idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
 
         # 1) Total seal leakage per individual (sum across all seals)
         F[:, 0] = seal_leak.sum(axis=1)
+        
+        # 2) Total bearing power loss (sum across all brgs)
+        F[:, 1] = loss_brg[:,:,:,idx_op].sum(axis=1).squeeze()
 
         # Node-wise amplitudes from harmonic response
         # harmonic: [pop, n_w, n_dof, 1] complex
@@ -351,7 +364,7 @@ class RotordynamicProblem(Problem):
         Uy = harmonic[:, :, idx_y, 0]
         amp = np.sqrt(np.abs(Ux)**2 + np.abs(Uy)**2)  # [pop, n_w, n_node]
 
-        # 2) Amplification Factor using half-power bandwidth: AF = Nc / (N2 - N1)
+        # 3) Amplification Factor using half-power bandwidth: AF = Nc / (N2 - N1)
         # Use calibration nodes (bearings + seals). If empty, fallback to all nodes.
         brg_nodes = np.array([b.node for b in brgs], dtype=int)
         seal_nodes = np.array([s.node for s in seals], dtype=int)
@@ -401,9 +414,9 @@ class RotordynamicProblem(Problem):
                     if af_peak > af_p:
                         af_p = af_peak
             AF_max[p] = af_p
-        F[:, 1] = AF_max
+        F[:, 2] = AF_max
 
-        # 3) -min log decrement over first 8 forward modes
+        # 4) -min log decrement over first 8 forward modes
         alpha = np.real(eigvals)  # [pop, n_w, 2n]
         beta  = np.imag(eigvals)
         beta_pos = np.where(beta > 1e-12, beta, np.inf)
@@ -420,9 +433,20 @@ class RotordynamicProblem(Problem):
         valid = np.isfinite(beta_pos[ip, iw, sel])
         logdec_masked = np.where(valid, logdec, np.inf)
         min_logdec = np.min(logdec_masked, axis=(1, 2))  # [pop]
-        F[:, 2] = -min_logdec
+        F[:, 3] = -min_logdec
+        
+        # alpha8, beta8, logdec (너가 이미 계산) 가정
+        alpha_max = np.max(alpha8, axis=(1,2))          # [pop]
+        g = np.min(logdec_masked, axis=(1,2))           # [pop]  (유효치 외 inf)
 
-        # 4) Bearing amplitude ratio (%): amp(node_brg,:)/Cp * 100 -> global max
+        # A안: 기본형
+        big = 1e6
+        unstable = alpha_max > 0
+        f_dec = np.where(unstable, big + np.maximum(0.0, alpha_max), -g)
+
+        F[:, 3] = f_dec  # 대수감쇠 목적
+
+        # 5) Bearing amplitude ratio (%): amp(node_brg,:)/Cp * 100 -> global max
         brg_nodes = np.array([b.node for b in brgs], dtype=int)
         if brg_nodes.size > 0:
             brg_ids = X_brg[:, :, 0].astype(int)                         # [pop, n_brg]
@@ -442,20 +466,20 @@ class RotordynamicProblem(Problem):
             Cp = Cr / np.clip(1.0 - Mp, 1e-9, None)                     # [pop, n_brg]
             amp_brg = amp[:, :, brg_nodes]                               # [pop, n_w, n_brg]
             amp_ratio_brg = (amp_brg / (Cp[:, None, :] + eps)) * 100.0
-            F[:, 3] = amp_ratio_brg.reshape(pop, -1).max(axis=1)
+            F[:, 4] = amp_ratio_brg.reshape(pop, -1).max(axis=1)
         else:
-            F[:, 3] = 0.0
+            F[:, 4] = 0.0
 
-        # 5) Seal amplitude ratio (%): amp(node_seal,:)/min(h_in,h_out) * 100 -> global max
+        # 6) Seal amplitude ratio (%): amp(node_seal,:)/min(h_in,h_out) * 100 -> global max
         if seal_nodes.size > 0:
             h_in  = (X_seal[:, :, 0].astype(float) * f_seal_dim[0])   # [pop, n_seal]
             h_out = (X_seal[:, :, 1].astype(float) * f_seal_dim[1])   # [pop, n_seal]
             h_min = np.minimum(h_in, h_out)
             amp_seal = amp[:, :, seal_nodes]                          # [pop, n_w, n_seal]
             amp_ratio_seal = (amp_seal / (h_min[:, None, :] + eps)) * 100.0
-            F[:, 4] = amp_ratio_seal.reshape(pop, -1).max(axis=1)
+            F[:, 5] = amp_ratio_seal.reshape(pop, -1).max(axis=1)
         else:
-            F[:, 4] = 0.0
+            F[:, 5] = 0.0
 
         out["F"] = F
 
@@ -465,26 +489,39 @@ crossover = TwoPointCrossover()
 mutation = PolynomialMutation(eta=20)
 repair = RoundRepair()
 
-algorithm = NSGA2(
-    pop_size=n_pop,
-    sampling=sampling,
-    crossover=crossover,
-    mutation=mutation,
-    eliminate_duplicates=True,
-    repair=repair
-)
+if  which_algorithm == 'NSGA2':
+    algorithm = NSGA2(
+        pop_size=n_pop,
+        sampling=sampling,
+        crossover=crossover,
+        mutation=mutation,
+        eliminate_duplicates=True,
+        repair=repair
+    )
+elif which_algorithm == 'UNSGA3':
+    from pymoo.util.ref_dirs import get_reference_directions
 
-# termination = get_termination("n_gen", 200) 
-termination = get_termination("moo", ftol=0.0025, period=30)
+    ref_dirs = get_reference_directions("energy", n_dim=n_objs, n_points=n_pop, seed=42)
+
+    algorithm = UNSGA3(
+        ref_dirs=ref_dirs,
+        pop_size=n_pop,
+        sampling=sampling,
+        crossover=crossover,
+        mutation=mutation,
+        eliminate_duplicates=True,
+        repair=repair
+    )
+else:
+    print("optimization algorithm not defined")
+    raise ValueError()
 
 
-# from pymoo.core.termination import TerminateIfAny
-# from pymoo.termination.default import DefaultMultiObjectiveTermination
-# from pymoo.termination.max_time import TimeBasedTermination
+from pymoo.core.termination import TerminateIfAny
+from pymoo.termination.default import DefaultMultiObjectiveTermination
+from pymoo.termination.max_gen import MaximumGenerationTermination
 
-
-# termination = TerminateIfAny(DefaultMultiObjectiveTermination(), TimeBasedTermination(0.2))
-
+termination = TerminateIfAny(DefaultMultiObjectiveTermination(), MaximumGenerationTermination(n_max_gen))
 
 problem = RotordynamicProblem()
 print("Done >.<\n\n\n")

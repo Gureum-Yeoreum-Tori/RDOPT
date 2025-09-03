@@ -156,7 +156,144 @@ d = np.load('checkpoints/latest.npz')
 X_pop, F_pop = d['pop_X'], d['pop_F']
 X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
-obj_names = ['total_leak', 'max_AF', '-min_logdec', 'max_ampRatioBrg', 'max_ampRatioSeal']
+obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg', 'max_ampRatioSeal']
+
+#%%
+from pymoo.visualization.pcp import PCP
+
+F = F_pareto
+sorted_idx = np.argsort(F[:,0])
+
+plot = PCP(title="Pareto Front (Objectives)",
+        legend=(True, {'loc': "upper left"}),
+        labels=obj_names
+        )
+plot.set_axis_style(color="grey", alpha=0.5)
+plot.add(F, color="grey", alpha=0.3)
+plot.add(F[sorted_idx[0]], linewidth=5, color="red")
+plot.add(F[sorted_idx[-1]], linewidth=5, color="blue")
+plot.show()
+
+#%%
+plt.figure()
+plt.plot(F[:,1])
+plt.show()
+
+# why negative??
+
+#%%
+sorted_brg = np.argsort(F[:,1])
+idx_brg_wrong = sorted_brg[0]
+
+# Recalculate bearing data (rdc + loss) for the selected case
+
+# Extract the design vector for the identified case (from Pareto set)
+X_case = X_pareto[idx_brg_wrong:idx_brg_wrong+1]
+pop = X_case.shape[0]
+
+# Split variables into bearing and seal parts
+X_brg = X_case[:, :2*n_brg].reshape(pop, n_brg, 2)
+
+# Scale bearing parameters: [id, cr_ratio]
+x_brg = X_brg * f_brg_dim
+
+
+
+# Compute bearing K, C, and power loss over speed
+K_brg_chk, C_brg_chk, loss_brg_chk = model_brg.calculate_brg_rdc_batch(
+    brgs=brgs, params_batch=x_brg, w_vec=w_vec
+)
+# Calculate bearing geometry and Sommerfeld number, then plot S vs K and C
+# Vectorized geometry for the selected design
+brg_ids = X_brg[:, :, 0].astype(int).squeeze(0)              # (n_brg,)
+cr_ratio = (X_brg[:, :, 1] * f_brg_dim[0, 1]).squeeze(0)     # (n_brg,)
+
+Db = np.array([b.Db for b in brgs], dtype=float)             # (n_brg,)
+mu = np.array([b.mu for b in brgs], dtype=float)             # (n_brg,)
+load = np.array([b.load for b in brgs], dtype=float)         # (n_brg,)
+
+# Lookup bearing-specific parameters (Mp, LD)
+Mp = np.array([float(model_brg.get_bearing_by_id(int(bid))['Mp']) for bid in brg_ids], dtype=float)
+LD = np.array([float(model_brg.get_bearing_by_id(int(bid))['LD']) for bid in brg_ids], dtype=float)
+L = LD * Db
+
+# Clearances
+Cr = Db * cr_ratio                                           # (n_brg,)
+Cp = Cr / np.clip(1.0 - Mp, 1e-12, None)                     # (n_brg,)
+
+# Sommerfeld number S = mu*w*L*Db^3 / (8*pi*load*Cp^2)
+w = w_vec[None, :]                                           # (1, n_w)
+num = (mu[:, None] * w) * (L[:, None] * (Db[:, None]**3))
+den = (8.0 * np.pi) * (load[:, None] * (Cp[:, None]**2) + 1e-18)
+S = num / den                                                # (n_brg, n_w)
+Kdim = K_brg_chk[0]  # (n_brg, 4, n_w)
+Cdim = C_brg_chk[0] 
+for c_brg in range(2):
+    fcof = model_brg.get_bearing_by_id(X_brg[0,c_brg,0])['fcof']
+    
+    # Extract dimensional K, C for the single population
+    S_ = S[c_brg,:]
+    Kdim1 = Kdim[c_brg]  # (4, n_w)
+    Cdim1 = Cdim[c_brg]  # (4, n_w)
+    loss_dim = loss_brg_chk[:,0].squeeze()
+
+    # plt.figure(figsize=(10,4))
+    # plt.plot(S_,Kdim1.transpose())
+    # plt.show()
+
+    # plt.figure(figsize=(10,4))
+    # plt.plot(S_,Cdim1.transpose())
+    # plt.show()
+    
+    plt.figure(figsize=(10,4))
+    plt.plot(S_,fcof(S_).squeeze())
+    plt.show()
+    
+    # plt.figure(figsize=(10,4))
+    # plt.plot(S_,loss_dim.squeeze())
+    # plt.show()
+
+#%%
+
+# Plot S vs Kxx and S vs Cxx for each bearing
+plt.figure(figsize=(10,4))
+plt.subplot(1,2,1)
+for j in range(len(brgs)):
+    plt.plot(S[j], Kdim1[j, 0], label=f'Brg {int(brg_ids[j])}')  # Kxx
+plt.xlabel('Sommerfeld number S')
+plt.ylabel('Kxx [N/m]')
+plt.title('S vs Kxx')
+plt.grid(alpha=0.3)
+plt.legend(fontsize=8)
+
+plt.subplot(1,2,2)
+for j in range(len(brgs)):
+    plt.plot(S[j], Cdim[j, 0], label=f'Brg {int(brg_ids[j])}')  # Cxx
+plt.xlabel('Sommerfeld number S')
+plt.ylabel('Cxx [N·s/m]')
+plt.title('S vs Cxx')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Calculate total bearing power loss at operating speed index
+idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
+brg_loss_recalc = loss_brg_chk[:,:,:,idx_op].sum(axis=1).squeeze()
+
+# Quick sanity print to compare with stored objective
+print("[recalc] brg_loss (stored, recalculated) =",
+    float(F_pareto[idx_brg_wrong, 1]), float(brg_loss_recalc))
+
+
+#%%
+plt.figure()
+plt.plot(F_pareto[:,2])
+
+
+
+
+#%%
+
 
 def plot_pairwise(F_pop, F_par, names):
     m = F_pop.shape[1]
@@ -230,8 +367,6 @@ def plot_bearing_id_hist(X_pop, X_par, n_brg):
     plt.xlabel('Bearing ID'); plt.ylabel('Count'); plt.legend(); plt.tight_layout(); plt.show()
 
 plot_bearing_id_hist(X_pop, X_pareto, n_brg)
-
-
 
 
 
