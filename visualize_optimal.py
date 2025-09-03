@@ -160,6 +160,7 @@ obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg
 
 
 #%%
+F = F_pareto
 sorted_brg = np.argsort(F[:,1])
 idx_brg_wrong = sorted_brg[0]
 
