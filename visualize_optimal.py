@@ -158,28 +158,6 @@ X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
 obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg', 'max_ampRatioSeal']
 
-#%%
-from pymoo.visualization.pcp import PCP
-
-F = F_pareto
-sorted_idx = np.argsort(F[:,0])
-
-plot = PCP(title="Pareto Front (Objectives)",
-        legend=(True, {'loc': "upper left"}),
-        labels=obj_names
-        )
-plot.set_axis_style(color="grey", alpha=0.5)
-plot.add(F, color="grey", alpha=0.3)
-plot.add(F[sorted_idx[0]], linewidth=5, color="red")
-plot.add(F[sorted_idx[-1]], linewidth=5, color="blue")
-plot.show()
-
-#%%
-plt.figure()
-plt.plot(F[:,1])
-plt.show()
-
-# why negative??
 
 #%%
 sorted_brg = np.argsort(F[:,1])
@@ -252,6 +230,60 @@ for c_brg in range(2):
     # plt.figure(figsize=(10,4))
     # plt.plot(S_,loss_dim.squeeze())
     # plt.show()
+
+
+#%%
+from pymoo.visualization.pcp import PCP
+
+F = F_pareto
+sorted_idx = np.argsort(F[:,0])
+
+plot = PCP(title=("Pareto Front (Objectives)",{'pad': 30}),
+        legend=(True, {'loc': "upper left"}),
+        labels=obj_names
+        )
+plot.set_axis_style(color="grey", alpha=0.5)
+plot.add(F, color="grey", alpha=0.3)
+plot.add(F[sorted_idx[0]], linewidth=5, color="red")
+plot.add(F[sorted_idx[-1]], linewidth=5, color="blue")
+plot.show()
+
+#%%
+
+
+FF = []
+for idx in np.arange(5,405,5,dtype=int):
+    d = np.load(f'checkpoints/gen_{idx:04d}.npz')
+    F = d.get('opt_F')
+    if F is None or F.size == 0 or F.shape[1] != 6: 
+        continue
+    FF.append(F)
+F_all = np.vstack(FF)
+
+
+# d = np.load('checkpoints/latest.npz')
+# X_pop, F_pop = d['pop_X'], d['pop_F']
+# X_pareto, F_pareto = d['opt_X'], d['opt_F']
+
+
+
+#%%
+
+
+
+from pymoo.visualization.radviz import Radviz
+obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg', 'max_ampRatioSeal']
+plot = Radviz(title="Optimization",
+              legend=(True, {'loc': "upper left", 'bbox_to_anchor': (-0.1, 1.08, 0, 0)}),
+              labels=obj_names,
+              endpoint_style={"s": 70, "color": "green"})
+plot.set_axis_style(color="black", alpha=1.0)
+plot.add(F_all, color="grey", s=20)
+plot.show()
+
+
+
+
 
 #%%
 
