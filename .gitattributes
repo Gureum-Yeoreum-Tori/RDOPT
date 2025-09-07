@@ -3,3 +3,4 @@ solver_seal.py          filter=git-crypt diff=git-crypt
 solver_rotordyn.py      filter=git-crypt diff=git-crypt
 solver_*.py      filter=git-crypt diff=git-crypt
 loader_*.py      filter=git-crypt diff=git-crypt
+check_%.py filter=git-crypt diff=git-crypt

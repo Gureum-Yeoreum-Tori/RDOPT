@@ -269,7 +269,6 @@ class RotordynamicProblem(Problem):
         super().__init__(n_var=n_var, n_obj=n_objs, n_constr=0, xl=self._xl(), xu=self._xu(), elementwise_evaluation=False)
 
     def _xl(self):
-        # 전 씰 동일 범위라면 반복
         lb = []
         for _ in range(n_brg):
             lb += [LB_brg_idx, LB_cr]
@@ -286,7 +285,6 @@ class RotordynamicProblem(Problem):
         return np.array(ub, dtype=int)
 
     def _evaluate(self, X, out, *args, **kwargs):
-        # X: [pop, n_var] 정수 행렬
         pop = X.shape[0]
         X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
         X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
@@ -338,25 +336,10 @@ class RotordynamicProblem(Problem):
             w_vec=w_vec,
         )
         
-        # calculate objective functions
-        # 1) total seal leakage
-        # 2) total bearing power loss
-        # 3) maximum amplification factor (half-power method per node/peak)
-        # 4) -min log decrement across first 8 forward modes over all speeds
-        # 5) max bearing amplitude ratio (% of clearance)
-        # 6) max seal amplitude ratio (% of min clearance)
-
-        # Operating index
         idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
-
-        # 1) Total seal leakage per individual (sum across all seals)
         F[:, 0] = seal_leak.sum(axis=1)
-        
-        # 2) Total bearing power loss (sum across all brgs)
         F[:, 1] = loss_brg[:,:,:,idx_op].sum(axis=1).squeeze()
 
-        # Node-wise amplitudes from harmonic response
-        # harmonic: [pop, n_w, n_dof, 1] complex
         assert n_dof == 4 * n_node
         idx_x = np.arange(n_node) * 4
         idx_y = idx_x + 2
@@ -364,8 +347,6 @@ class RotordynamicProblem(Problem):
         Uy = harmonic[:, :, idx_y, 0]
         amp = np.sqrt(np.abs(Ux)**2 + np.abs(Uy)**2)  # [pop, n_w, n_node]
 
-        # 3) Amplification Factor using half-power bandwidth: AF = Nc / (N2 - N1)
-        # Use calibration nodes (bearings + seals). If empty, fallback to all nodes.
         brg_nodes = np.array([b.node for b in brgs], dtype=int)
         seal_nodes = np.array([s.node for s in seals], dtype=int)
         cal_nodes = np.unique(np.concatenate([brg_nodes, seal_nodes]))
@@ -409,52 +390,36 @@ class RotordynamicProblem(Problem):
                         else:
                             i1 = j + 1 + r_idx_rel[0]
                             x1, y1 = w[i1], y[i1]
-                            N2 = x1 - (y1 - yhpp) / max(y1 - Ac, eps) * (x1 - w[j])
+                            N2 = x1 + (yhpp - y1) / max(Ac - y1, eps) * (w[j] - x1)
                     af_peak = w[j] / max(N2 - N1, eps)
                     if af_peak > af_p:
                         af_p = af_peak
             AF_max[p] = af_p
         F[:, 2] = AF_max
 
-        # 4) -min log decrement over first 8 forward modes
         alpha = np.real(eigvals)  # [pop, n_w, 2n]
         beta  = np.imag(eigvals)
-        beta_pos = np.where(beta > 1e-12, beta, np.inf)
-        idx_sorted = np.argsort(beta_pos, axis=2)
-        take = min(8, idx_sorted.shape[2])
-        sel = idx_sorted[:, :, :take]  # [pop, n_w, take]
-        ip = np.arange(pop)[:, None, None]
-        iw = np.arange(n_w)[None, :, None]
-        alpha8 = alpha[ip, iw, sel]
-        beta8  = beta[ip, iw, sel]
-        wn = np.sqrt(np.maximum(alpha8**2 + beta8**2, 1e-30))
-        zeta = np.clip(-alpha8 / (wn + 1e-30), 1e-12, 0.999999)
-        logdec = 2.0 * np.pi * zeta / np.sqrt(1.0 - zeta**2)
-        valid = np.isfinite(beta_pos[ip, iw, sel])
-        logdec_masked = np.where(valid, logdec, np.inf)
-        min_logdec = np.min(logdec_masked, axis=(1, 2))  # [pop]
-        F[:, 3] = -min_logdec
         
-        # alpha8, beta8, logdec (너가 이미 계산) 가정
-        alpha_max = np.max(alpha8, axis=(1,2))          # [pop]
-        g = np.min(logdec_masked, axis=(1,2))           # [pop]  (유효치 외 inf)
+        alpha8 = alpha[:,:,:8]
+        beta8  = beta[:,:,:8]
+        logdec = -2 * np.pi * alpha8 / np.sqrt(alpha8**2 + beta8**2)
+        min_logdec = np.min(logdec, axis=(1, 2)) # [pop]
+        F[:, 3] = -min_logdec
 
-        # A안: 기본형
-        big = 1e6
-        unstable = alpha_max > 0
-        f_dec = np.where(unstable, big + np.maximum(0.0, alpha_max), -g)
+        # logdec2 = -2 * np.pi * alpha8 / beta8 # almost same
+        # wn = np.sqrt(np.maximum(alpha8**2 + beta8**2, 1e-30))
+        # zeta = np.clip(-alpha8 / (wn + 1e-30), a_min=1e-12, a_max = 0.999)
+        # logdec3 = 2.0 * np.pi * zeta / np.sqrt(1.0 - zeta**2)
+        # logdec_masked = np.where(valid, logdec, np.inf)
+        # min_logdec = np.min(logdec_masked, axis=(1, 2))  # [pop]
 
-        F[:, 3] = f_dec  # 대수감쇠 목적
-
-        # 5) Bearing amplitude ratio (%): amp(node_brg,:)/Cp * 100 -> global max
         brg_nodes = np.array([b.node for b in brgs], dtype=int)
         if brg_nodes.size > 0:
             brg_ids = X_brg[:, :, 0].astype(int)                         # [pop, n_brg]
             cr_ratio = (X_brg[:, :, 1] * f_brg_dim[0, 1]).astype(float)  # scaled
             Db_all = np.array([b.Db for b in brgs], dtype=float)[None, :]
             Cr = Db_all * cr_ratio                                       # [pop, n_brg]
-            # Vectorized Mp lookup
-            # Build lookup array for Mp where index = bearing_id
+
             max_id = int(np.max(brg_ids)) if brg_ids.size else 0
             mp_lookup = np.zeros(max(UB_brg_idx + 1, max_id + 1), dtype=float)
             for bid in range(1, mp_lookup.size):
@@ -470,7 +435,6 @@ class RotordynamicProblem(Problem):
         else:
             F[:, 4] = 0.0
 
-        # 6) Seal amplitude ratio (%): amp(node_seal,:)/min(h_in,h_out) * 100 -> global max
         if seal_nodes.size > 0:
             h_in  = (X_seal[:, :, 0].astype(float) * f_seal_dim[0])   # [pop, n_seal]
             h_out = (X_seal[:, :, 1].astype(float) * f_seal_dim[1])   # [pop, n_seal]
