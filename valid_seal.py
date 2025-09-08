@@ -18,8 +18,11 @@ mat_files = ('20250826_T_091719',)
 mat_files = ('20250826_T_093534',)
 mat_files = ('20250826_T_095326',)
 
+mat_files = ('20250908_T_182846','20250908_T_183632','20250908_T_203220',)
+
 # w_range = np.array([1000, 6000]) * np.pi / 30
 w_range = np.array([500, 6000]) * np.pi / 30
+w_range = np.array([500, 8000]) * np.pi / 30
 w_oper = 3500 * np.pi / 30
 oper = {
         'w_min': w_range[0],
@@ -32,7 +35,7 @@ bs_params = {
         'rho_seal': 850, # kg/m^3, seal fluid 
     }
 
-n_w = 12
+n_w = 15
 n_pop = 200
 n_max_gen = 500
 w_vec = np.linspace(w_range[0], w_range[1], n_w)

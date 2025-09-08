@@ -35,7 +35,8 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_files = ('20250826_T_093534',)
 # mat_files = ('20250826_T_095326',)
 
-mat_files = ('20250908_T_154540','20250908_T_155223','20250908_T_155858',)
+# mat_files = ('20250908_T_154540','20250908_T_155223','20250908_T_155858',)
+mat_files = ('20250908_T_182846','20250908_T_183632','20250908_T_203220',)
 
 
 # 파라미터 설정 (기존)
@@ -54,13 +55,16 @@ mat_files = ('20250908_T_154540','20250908_T_155223','20250908_T_155858',)
 # weight_decay=1e-5
 
 # 파라미터 설정
-batch_size = 2**8
+batch_size = 2**9
 criterion = nn.HuberLoss()
 criterion = nn.MSELoss()
-epochs = 2500
-param_embedding_dim = 2**7
-hidden_channels = 2**7
+epochs = 5000
+param_embedding_dim = 2**6
+hidden_channels = 2**6
 n_layers = 6
+param_embedding_dim = 2**6
+hidden_channels = 2**6
+n_layers = 8
 shared_out_channels = hidden_channels
 p_drop = 0.0
 
@@ -173,8 +177,8 @@ class MultiHeadDeepONet(nn.Module):
         y = torch.einsum('bhn,bln->bhl', coeff, phi)  # [B, n_heads, L]
         return y
     
-# for seal_idx, mat_file in enumerate(mat_files):
-for mat_file in mat_files:
+for seal_idx, mat_file in enumerate(mat_files):
+# for mat_file in mat_files:
     mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
 
     print('current file: '+mat_file)
@@ -550,7 +554,7 @@ for mat_file in mat_files:
     X = input_.transpose()
     pop = X.shape[0]
     n_w = w.shape[0]
-    rdc_flat  = model_seal.predict(1, X, w).reshape(pop, 1, 4, n_w).squeeze()
+    rdc_flat  = model_seal.predict(seal_idx+1, X, w).reshape(pop, 1, 4, n_w).squeeze()
     rdc_true = rdc.transpose([2,0,1])
     
     rdc_flat_ = np.ravel(rdc_flat)
