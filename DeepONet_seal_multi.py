@@ -10,6 +10,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader, random_split
 from sklearn.preprocessing import StandardScaler
+from torch.nn.utils import clip_grad_norm_
+
 # from neuralop.layers.spectral_convolution import SpectralConv
 
 # add_safe_globals([torch._C._nn.gelu])
@@ -27,22 +29,38 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_files = ('20250825_T_123550',)
 # mat_files = ('20250825_T_125136',)
 # mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
-mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
+# mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
+mat_files = ('20250826_T_095326',)
+
+# 파라미터 설정 (기존)
+# batch_size = 2**10
+# criterion = nn.MSELoss()
+# epochs = 5000
+# param_embedding_dim = 2**8
+# hidden_channels = 2**8
+# n_layers = 8
+# shared_out_channels = hidden_channels
+# p_drop = 0
+
+# lr = 1e-5
+# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# print(f"Using device: {device}")
+# weight_decay=1e-5
 
 # 파라미터 설정
-batch_size = 2**10
-criterion = nn.MSELoss()
+batch_size = 2**9
+criterion = nn.HuberLoss()
 epochs = 5000
-param_embedding_dim = 2**8
-hidden_channels = 2**8
-n_layers = 8
+param_embedding_dim = 2**6
+hidden_channels = 2**7
+n_layers = 6
 shared_out_channels = hidden_channels
-p_drop = 0
+p_drop = 0.1
 
-lr = 1e-5
+lr = 1e-4
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
-weight_decay=1e-5
+weight_decay=1e-4
 
 import json
 
@@ -57,6 +75,39 @@ hyperparams = {
 }
 
 print(json.dumps(hyperparams, indent=2))
+
+#%%
+import math
+class EarlyStopping:
+    def __init__(self, patience=100, minimize=True):
+        self.best = math.inf if minimize else -math.inf
+        self.minimize = minimize
+        self.patience = patience
+        self.wait = 0
+        self.best_state = None
+
+    def step(self, metric, model):
+        improved = (metric < self.best) if self.minimize else (metric > self.best)
+        if improved:
+            self.best = metric
+            self.wait = 0
+            self.best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            return False  # not early stop
+        else:
+            self.wait += 1
+            return self.wait > self.patience
+
+def build_warmup_cosine(optimizer, total_steps, warmup_steps=500):
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_steps
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, total_steps - warmup_steps)
+    )
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps]
+    )
+    
 
 class MultiHeadDeepONet(nn.Module):
 
@@ -233,7 +284,13 @@ for seal_idx, mat_file in enumerate(mat_files):
     # ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    
+    steps_per_epoch = math.ceil(len(train_loader))
+    total_steps = steps_per_epoch * epochs
+    scheduler = build_warmup_cosine(optimizer, total_steps, warmup_steps=500)
+
+    early = EarlyStopping(patience=100, minimize=True)
 
     best_val_loss = float('inf')
     start_epoch = 0
@@ -272,13 +329,17 @@ for seal_idx, mat_file in enumerate(mat_files):
         for params, functions in train_loader:
             params, functions = params.to(device), functions.to(device)
             batch_grid = grid_tensor.unsqueeze(0).repeat(params.size(0), 1, 1).to(device)
-            optimizer.zero_grad()
             outputs = model(params, batch_grid)
             loss = criterion(outputs, functions)
-            loss.backward(); optimizer.step()
+            
+            optimizer.zero_grad()
+            loss.backward(); 
+            clip_grad_norm_(model.parameters(), max_norm=1.0) # gradient clipping
+            optimizer.step()
             train_loss += loss.item() * params.size(0)
             n_train += params.size(0)
         train_loss /= n_train
+        scheduler.step()
         
         model.eval(); val_loss = 0.0
         n_val = 0
@@ -312,7 +373,7 @@ for seal_idx, mat_file in enumerate(mat_files):
             'epoch': epoch
         }, ckpt_last_path)
 
-        scheduler.step()
+        
     
     # 저장
     ckpt = {

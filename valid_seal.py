@@ -76,10 +76,11 @@ for r in range(4):
     a_e_sorted = a_e[idx_rel_sorted]
 
     plt.subplot(211)
-    plt.plot(a_e_sorted[:20],'o-')
+    plt.plot(a_e_sorted[:100],'o-')
     plt.title("absoulte error")
     plt.subplot(212)
-    plt.plot(r_e_sorted[:20],'o-')
+    plt.plot(r_e_sorted[:100],'o-')
+    plt.ylim([-100, 100])
     plt.title("relative error")
     
     
