@@ -90,7 +90,7 @@ for r in range(4):
     # plt.subplot(313)
     # plt.plot(rdc_true[:,r,idx_w])
     # plt.plot(rdc_flat[:,r,idx_w])
-    fig.show()
+    # fig.show()
 
 #%%
 

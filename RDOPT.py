@@ -84,7 +84,7 @@ print("Rotor data loaded >.<\n")
 from datetime import datetime
 from pathlib import Path
 
-date_now   = datetime.now().strftime("%y%m%d_T_%H%M%S")   # "uuMMdd_'T'_HHmmss" 대응
+date_now   = datetime.now().strftime("%y%m%d_T_%H%M%S")
 res_       = "rotordyn"
 save_path  = Path("result") / res_ / rotor_sheet / date_now
 save_path.mkdir(parents=True, exist_ok=True)
@@ -524,6 +524,7 @@ print("Optimization completed!")
 print("elapsed time =",f"{t_elapsed:.2f}","sec\n")
 
 
+np.savez(output_file.with_suffix(".npz"), X=res.X, F=res.F, OPT = res.opt, POP = res.pop)
 np.savez(output_file.with_suffix(".npz"), X=res.X, F=res.F, OPT = res.opt, POP = res.pop, HISTORY = res.history)
 
 

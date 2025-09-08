@@ -59,11 +59,7 @@ hyperparams = {
 print(json.dumps(hyperparams, indent=2))
 
 class MultiHeadDeepONet(nn.Module):
-    """
-    DeepONet (Branch/Trunk) 다중 헤드 버전.
-    입력:  params [B, n_params], grid [B, n_vel, 1]
-    출력:  [B, n_heads, n_vel]
-    """
+
     def __init__(self,
                 n_params: int,
                 param_embedding_dim: int,
@@ -119,7 +115,7 @@ class MultiHeadDeepONet(nn.Module):
         y = torch.einsum('bhn,bln->bhl', coeff, phi)  # [B, n_heads, L]
         return y
     
-for mat_file in mat_files:
+for seal_idx, mat_file in enumerate(mat_files):
     mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
 
     print('current file: '+mat_file)
@@ -476,4 +472,42 @@ for mat_file in mat_files:
 
     # print(f"Inference time for {len(test_dataset)} samples: {end_time - start_time:.6f} seconds")
     # print(f"Average per sample: {(end_time - start_time)/len(test_dataset):.6f} seconds")
+
+    #%%
+    from loader_brg_seal import SealDONModel
+    model_seal = SealDONModel(device=device)
+
+    X = input_.transpose()
+    pop = X.shape[0]
+    n_w = w.shape[0]
+    rdc_flat  = model_seal.predict(seal_idx+1, X, w).reshape(pop, 1, 4, n_w).squeeze()
+    rdc_true = rdc.transpose([2,0,1])
+        
+    abs_err = rdc_true-rdc_flat
+    rel_err = (rdc_true-rdc_flat)/np.abs(rdc_true)*1e2
+    idx_w = -1
+    for r in range(4):
+        fig = plt.figure()
+        r_e = rel_err[:,r,idx_w]
+        a_e = abs_err[:,r,idx_w]
+        idx_rel_sorted = np.flip(np.argsort(np.abs(r_e)))
+        r_e_sorted = r_e[idx_rel_sorted]
+        a_e_sorted = a_e[idx_rel_sorted]
+
+        plt.subplot(211)
+        plt.plot(a_e_sorted[:50],'o-')
+        plt.title("absoulte error")
+        plt.subplot(212)
+        plt.plot(r_e_sorted[:50],'o-')
+        plt.title("relative error")
+        
+        
+        # plt.subplot(311)
+        # plt.plot(abs_err[:,r,idx_w])
+        # plt.subplot(312)
+        # plt.plot(rel_err[:,r,idx_w])
+        # plt.subplot(313)
+        # plt.plot(rdc_true[:,r,idx_w])
+        # plt.plot(rdc_flat[:,r,idx_w])
+        # fig.show()
 
