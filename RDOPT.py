@@ -81,6 +81,19 @@ matrix_params = {
 print("Rotor data loaded >.<\n")
 
 #%%
+from datetime import datetime
+from pathlib import Path
+
+date_now   = datetime.now().strftime("%y%m%d_T_%H%M%S")   # "uuMMdd_'T'_HHmmss" 대응
+res_       = "rotordyn"
+save_path  = Path("result") / res_ / rotor_sheet / date_now
+save_path.mkdir(parents=True, exist_ok=True)
+
+output_file = save_path / "result"
+print("Result file path = ",save_path," \n")
+
+
+#%%
 print("Loading bearing and seal models...")
 ## Load brg model
 model_brg = BearingNondModel()
@@ -190,7 +203,7 @@ n_objs = 6  # [total_leak, power_loss, max_AF, -min_logdec, max_ampRatioBrg, max
         
         
 class TimerCheckpointCallback(Callback):
-    def __init__(self, out_dir: str = "checkpoints", freq: int = 5, save_pickle: bool = False):
+    def __init__(self, out_dir: str = "checkpoints", freq: int = 5, save_pickle: bool = True):
         super().__init__()
         self.prev_time = None
         self.out_dir = out_dir
@@ -325,7 +338,7 @@ class RotordynamicProblem(Problem):
             M=mat_M,
             K_all=K_all,
             Ceff_all=Ceff_all,
-            track=False,
+            track=True,
         )
         
         harmonic = unbalanced_response(
@@ -509,6 +522,15 @@ t_end = time.time()
 t_elapsed = t_end - t_start
 print("Optimization completed!")
 print("elapsed time =",f"{t_elapsed:.2f}","sec\n")
+
+
+np.savez(output_file.with_suffix(".npz"), X=res.X, F=res.F, OPT = res.opt, POP = res.pop, HISTORY = res.history)
+
+
+
+
+# with open(output_file.with_suffix(".pkl"), "wb") as f:
+#     pickle.dump(res, f)
 
 
 #%%

@@ -166,7 +166,12 @@ X_pop, F_pop = d['pop_X'], d['pop_F']
 X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
 #%%
-idx_chk = 1
+
+idx_sorted = np.argsort(F_pareto[:,3])
+# F_pareto[idx_sorted,3]
+
+
+idx_chk = idx_sorted[-1]
 X = X_pareto[idx_chk,:]
 #%%
 
@@ -212,7 +217,7 @@ eigvals, _ = eig(
     M=mat_M,
     K_all=K_all,
     Ceff_all=Ceff_all,
-    track=False,
+    track=True,
 )
 
 harmonic = unbalanced_response(
@@ -322,7 +327,7 @@ beta8  = beta[:,:,:8]
 logdec = -2 * np.pi * alpha8 / np.sqrt(alpha8**2 + beta8**2)
 min_logdec = np.min(logdec, axis=(1, 2))
 
-F[:, 3] = -logdec.squeeze()
+F[:, 3] = -min_logdec
 
 
 

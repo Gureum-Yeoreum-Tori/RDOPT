@@ -129,27 +129,25 @@ rdc_signs = np.array([1, 1, -1, 1])
 
 #%%
 # print("Defining optimization problem...")
-# ## prepare rotordynamic analysis
-# # --- input: mass, damping, stiffness matrix, w_vec, harmonic excitation cases
-# # --- output: critical speed, logarithmic decrement, damping ratio, unbalanced response,
-# # amplification factor, separation margin, minimum clearance, ...
-# rows_sup, cols_sup = support_dofs.rows, support_dofs.cols
-# C_struct = np.zeros_like(mat_K_r)
+## prepare rotordynamic analysis
+# --- input: mass, damping, stiffness matrix, w_vec, harmonic excitation cases
+# --- output: critical speed, logarithmic decrement, damping ratio, unbalanced response,
+# amplification factor, separation margin, minimum clearance, ...
+rows_sup, cols_sup = support_dofs.rows, support_dofs.cols
+C_struct = np.zeros_like(mat_K_r)
 
-# ## optimization parameter
-# n_type_brg = 55 # brg types
-# LB_brg_idx = 1; UB_brg_idx = 55
-# LB_cr = 10;  UB_cr = 30   # Cr/D = 10/10000 ~ 30/10000
+## optimization parameter
+n_type_brg = 55 # brg types
+LB_brg_idx = 1; UB_brg_idx = 55
+LB_cr = 10;  UB_cr = 30   # Cr/D = 10/10000 ~ 30/10000
 
-# n_type_seal = 3 # seal types
-# LB_h = 100; UB_h = 500 # seal clearance range
-# LB_psr = -10;  UB_psr = 10   # -> *0.1 해서 [0,1.0]
+n_type_seal = 3 # seal types
+LB_h = 100; UB_h = 500 # seal clearance range
+LB_psr = -10;  UB_psr = 10   # -> *0.1 해서 [0,1.0]
 
 ## Define optimization problem with vector computation
 n_var = 2 * n_brg + 3 * n_seal
-n_objs = 5  # [total_leak, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSeal]
-
-
+n_objs = 6  # [total_leak, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSeal]
 
 #%%
 d = np.load('checkpoints/latest.npz')
@@ -158,251 +156,450 @@ X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
 obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg', 'max_ampRatioSeal']
 
-
 #%%
-F = F_pareto
-sorted_brg = np.argsort(F[:,1])
-idx_brg_wrong = sorted_brg[0]
 
-# Recalculate bearing data (rdc + loss) for the selected case
+sorted_ = np.argsort(F_pareto[:,3])
+idx_wrong = sorted_[-1]
+val_wrong = F_pareto[idx_wrong,:]
 
-# Extract the design vector for the identified case (from Pareto set)
-X_case = X_pareto[idx_brg_wrong:idx_brg_wrong+1]
-pop = X_case.shape[0]
-
-# Split variables into bearing and seal parts
-X_brg = X_case[:, :2*n_brg].reshape(pop, n_brg, 2)
-
-# Scale bearing parameters: [id, cr_ratio]
-x_brg = X_brg * f_brg_dim
-
-
-
-# Compute bearing K, C, and power loss over speed
-K_brg_chk, C_brg_chk, loss_brg_chk = model_brg.calculate_brg_rdc_batch(
-    brgs=brgs, params_batch=x_brg, w_vec=w_vec
-)
-# Calculate bearing geometry and Sommerfeld number, then plot S vs K and C
-# Vectorized geometry for the selected design
-brg_ids = X_brg[:, :, 0].astype(int).squeeze(0)              # (n_brg,)
-cr_ratio = (X_brg[:, :, 1] * f_brg_dim[0, 1]).squeeze(0)     # (n_brg,)
-
-Db = np.array([b.Db for b in brgs], dtype=float)             # (n_brg,)
-mu = np.array([b.mu for b in brgs], dtype=float)             # (n_brg,)
-load = np.array([b.load for b in brgs], dtype=float)         # (n_brg,)
-
-# Lookup bearing-specific parameters (Mp, LD)
-Mp = np.array([float(model_brg.get_bearing_by_id(int(bid))['Mp']) for bid in brg_ids], dtype=float)
-LD = np.array([float(model_brg.get_bearing_by_id(int(bid))['LD']) for bid in brg_ids], dtype=float)
-L = LD * Db
-
-# Clearances
-Cr = Db * cr_ratio                                           # (n_brg,)
-Cp = Cr / np.clip(1.0 - Mp, 1e-12, None)                     # (n_brg,)
-
-# Sommerfeld number S = mu*w*L*Db^3 / (8*pi*load*Cp^2)
-w = w_vec[None, :]                                           # (1, n_w)
-num = (mu[:, None] * w) * (L[:, None] * (Db[:, None]**3))
-den = (8.0 * np.pi) * (load[:, None] * (Cp[:, None]**2) + 1e-18)
-S = num / den                                                # (n_brg, n_w)
-Kdim = K_brg_chk[0]  # (n_brg, 4, n_w)
-Cdim = C_brg_chk[0] 
-for c_brg in range(2):
-    fcof = model_brg.get_bearing_by_id(X_brg[0,c_brg,0])['fcof']
+X = X_pareto[idx_wrong,:]
+if X.shape[0] != 1:
+    X = np.expand_dims(X,axis=0)
     
-    # Extract dimensional K, C for the single population
-    S_ = S[c_brg,:]
-    Kdim1 = Kdim[c_brg]  # (4, n_w)
-    Cdim1 = Cdim[c_brg]  # (4, n_w)
-    loss_dim = loss_brg_chk[:,0].squeeze()
 
-    # plt.figure(figsize=(10,4))
-    # plt.plot(S_,Kdim1.transpose())
-    # plt.show()
+#%%
+op_view = 'check'
 
-    # plt.figure(figsize=(10,4))
-    # plt.plot(S_,Cdim1.transpose())
-    # plt.show()
+if op_view == 'check':
+    pop = X.shape[0]
+    X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
+    X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
+
+    F = np.zeros((pop, n_objs), dtype=float) # objective function value
+
+    x_brg = X_brg * f_brg_dim
+    K_brg, C_brg, loss_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
+
+    seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
+    seal_leak = np.zeros((pop, n_seal), dtype=float)
+
+    for t in range(n_type_seal):
+        idx = idx_seal[t]
+        if len(idx) == 0:
+            continue
+        
+        params_t = X_seal[:, idx]
+        x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
+        
+        leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
+        rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
+        
+        seal_leak[:, idx] = leak_flat
+        seal_rdc[:, idx] = rdc_flat
+
+    K_seal = seal_rdc[:,:,[2, 3, 3, 2],:] * rdc_signs[None, None, :, None]
+    C_seal = seal_rdc[:,:,[0, 1, 1, 0],:] * rdc_signs[None, None, :, None]
+
+    K_vals = np.concatenate([K_brg, K_seal], axis=1)  # (pop, n_sup, 4, n_w)
+    C_vals = np.concatenate([C_brg, C_seal], axis=1)  # (pop, n_sup, 4, n_w)
+
+    K_all, Ceff_all = assemble_system_matrix(
+        mat_K_r, C_struct, mat_C_g, w_vec, rows_sup, cols_sup, K_vals, C_vals
+    )
+
+    eigvals, _ = eig(
+        M=mat_M,
+        K_all=K_all,
+        Ceff_all=Ceff_all,
+        track=True,
+    )
+
+    harmonic = unbalanced_response(
+        M=mat_M,
+        unb=unb,
+        K_all=K_all,
+        Ceff_all=Ceff_all,
+        w_vec=w_vec,
+    )
+
+    idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
+    F[:, 0] = seal_leak.sum(axis=1)
+    F[:, 1] = loss_brg[:,:,:,idx_op].sum(axis=1).squeeze()
+
+    assert n_dof == 4 * n_node
+    idx_x = np.arange(n_node) * 4
+    idx_y = idx_x + 2
+    Ux = harmonic[:, :, idx_x, 0]  # [pop, n_w, n_node]
+    Uy = harmonic[:, :, idx_y, 0]
+    amp = np.sqrt(np.abs(Ux)**2 + np.abs(Uy)**2)  # [pop, n_w, n_node]
+
+    brg_nodes = np.array([b.node for b in brgs], dtype=int)
+    seal_nodes = np.array([s.node for s in seals], dtype=int)
+    cal_nodes = np.unique(np.concatenate([brg_nodes, seal_nodes]))
+
+    eps = 1e-18
+    AF_max = np.zeros(pop, dtype=float)
+    n_track = 4
+    w = w_vec
+    for p in range(pop):
+        af_p = 0.0
+        A = amp[p, :, cal_nodes]  # [n_cal, n_w] due to fancy indexing
+        for c in range(len(cal_nodes)):
+            y = A[c, :]
+            if y.size < 3:
+                continue
+            pk, _ = find_peaks(y)
+            if pk.size == 0:
+                continue
+            for j in pk:
+                Ac = y[j]
+                if Ac <= eps:
+                    continue
+                yhpp = Ac / np.sqrt(2.0)
+                # Left half-power crossing
+                if j == 0:
+                    N1 = w[0]
+                else:
+                    l_idx = np.where(y[:j] <= yhpp)[0]
+                    if l_idx.size == 0:
+                        N1 = w[0]
+                    else:
+                        i0 = l_idx[-1]
+                        x0, y0 = w[i0], y[i0]
+                        N1 = x0 + (yhpp - y0) / max(Ac - y0, eps) * (w[j] - x0)
+                # Right half-power crossing
+                if j >= y.size - 1:
+                    N2 = w[-1]
+                else:
+                    r_idx_rel = np.where(y[j+1:] <= yhpp)[0]
+                    if r_idx_rel.size == 0:
+                        N2 = w[-1]
+                    else:
+                        i1 = j + 1 + r_idx_rel[0]
+                        x1, y1 = w[i1], y[i1]
+                        N2 = x1 + (yhpp - y1) / max(Ac - y1, eps) * (w[j] - x1)
+                af_peak = w[j] / max(N2 - N1, eps)
+                if af_peak > af_p:
+                    af_p = af_peak
+        AF_max[p] = af_p
+    F[:, 2] = AF_max
+
+    alpha = np.real(eigvals)  # [pop, n_w, 2n]
+    beta  = np.imag(eigvals)
+
+    alpha_selected = alpha[:,:,:n_track]
+    beta_selected  = beta[:,:,:n_track]
+    logdec = -2 * np.pi * alpha_selected / np.sqrt(alpha_selected**2 + beta_selected**2)
+    min_logdec = np.min(logdec, axis=(1, 2)) # [pop]
+    F[:, 3] = -min_logdec
+
+    # logdec2 = -2 * np.pi * alpha8 / beta8 # almost same
+    # wn = np.sqrt(np.maximum(alpha8**2 + beta8**2, 1e-30))
+    # zeta = np.clip(-alpha8 / (wn + 1e-30), a_min=1e-12, a_max = 0.999)
+    # logdec3 = 2.0 * np.pi * zeta / np.sqrt(1.0 - zeta**2)
+    # logdec_masked = np.where(valid, logdec, np.inf)
+    # min_logdec = np.min(logdec_masked, axis=(1, 2))  # [pop]
+
+    brg_nodes = np.array([b.node for b in brgs], dtype=int)
+    if brg_nodes.size > 0:
+        brg_ids = X_brg[:, :, 0].astype(int)                         # [pop, n_brg]
+        cr_ratio = (X_brg[:, :, 1] * f_brg_dim[0, 1]).astype(float)  # scaled
+        Db_all = np.array([b.Db for b in brgs], dtype=float)[None, :]
+        Cr = Db_all * cr_ratio                                       # [pop, n_brg]
+
+        max_id = int(np.max(brg_ids)) if brg_ids.size else 0
+        mp_lookup = np.zeros(max(UB_brg_idx + 1, max_id + 1), dtype=float)
+        for bid in range(1, mp_lookup.size):
+            try:
+                mp_lookup[bid] = float(model_brg.get_bearing_by_id(bid)['Mp'])
+            except Exception:
+                mp_lookup[bid] = 0.0
+        Mp = mp_lookup[brg_ids]
+        Cp = Cr / np.clip(1.0 - Mp, 1e-9, None)                     # [pop, n_brg]
+        amp_brg = amp[:, :, brg_nodes]                               # [pop, n_w, n_brg]
+        amp_ratio_brg = (amp_brg / (Cp[:, None, :] + eps)) * 100.0
+        F[:, 4] = amp_ratio_brg.reshape(pop, -1).max(axis=1)
+    else:
+        F[:, 4] = 0.0
+
+    if seal_nodes.size > 0:
+        h_in  = (X_seal[:, :, 0].astype(float) * f_seal_dim[0])   # [pop, n_seal]
+        h_out = (X_seal[:, :, 1].astype(float) * f_seal_dim[1])   # [pop, n_seal]
+        h_min = np.minimum(h_in, h_out)
+        amp_seal = amp[:, :, seal_nodes]                          # [pop, n_w, n_seal]
+        amp_ratio_seal = (amp_seal / (h_min[:, None, :] + eps)) * 100.0
+        F[:, 5] = amp_ratio_seal.reshape(pop, -1).max(axis=1)
+    else:
+        F[:, 5] = 0.0
+        
+#%%
+else:
+    #%%
+    from pymoo.visualization.pcp import PCP
+
+    sorted_idx = np.argsort(F_pareto[:,0])
+    sorted_idx2 = np.argsort(F_pareto[:,1])
+    plot = PCP(title=("Pareto Front (Objectives)",{'pad': 30}),
+            legend=(True, {'loc': "upper left"}),
+            labels=obj_names
+            )
+    plot.set_axis_style(color="grey", alpha=0.5)
+    plot.add(F_pareto, color="grey", alpha=0.3)
+    plot.add(F_pareto[sorted_idx[0]], linewidth=5, color="red")
+    plot.add(F_pareto[sorted_idx[-1]], linewidth=5, color="blue")
+    plot.add(F_pareto[sorted_idx2[0]], linewidth=5, color="green")
+    plot.add(F_pareto[sorted_idx2[-1]], linewidth=5, color="purple")
+    plot.show()
+
+    #%%
+
+
+    FF = []
+    for idx in np.arange(5,405,5,dtype=int):
+        d = np.load(f'checkpoints/gen_{idx:04d}.npz')
+        F_ = d.get('opt_F')
+        if F_ is None or F_.size == 0 or F_.shape[1] != 6: 
+            continue
+        FF.append(F_)
+    F_all = np.vstack(FF)
+
+    # d = np.load('checkpoints/latest.npz')
+    # X_pop, F_pop = d['pop_X'], d['pop_F']
+    # X_pareto, F_pareto = d['opt_X'], d['opt_F']
+
+    #%%
+
+
+    from pymoo.visualization.radviz import Radviz
+    obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg', 'max_ampRatioSeal']
+    plot = Radviz(title="Optimization",
+                legend=(True, {'loc': "upper left", 'bbox_to_anchor': (-0.1, 1.08, 0, 0)}),
+                labels=obj_names,
+                endpoint_style={"s": 70, "color": "green"},
+                )
+    plot.set_axis_style(color="black", alpha=1.0)
+    # plot.add(F_all, color="grey", s=20)
+    plot.add(F_pareto, color="grey", s=20)
+    plot.show()
+
+    #%%
+    from sklearn.preprocessing import MinMaxScaler
+
+    F_scaled = F_pareto
+    for of in range(6):
+        scaler = MinMaxScaler()
+        scaler.fit(F_pareto[:,of].reshape(-1,1))
+        F_scaled[:,of] = scaler.transform(F_pareto[:,of].reshape(-1,1)).squeeze()
+    plot = Radviz(title="Optimization",
+                legend=(True, {'loc': "upper left", 'bbox_to_anchor': (-0.1, 1.08, 0, 0)}),
+                labels=obj_names,
+                endpoint_style={"s": 70, "color": "green"})
+    plot.set_axis_style(color="black", alpha=1.0)
+    # plot.add(F_all, color="grey", s=20)
+    plot.add(F_scaled, color="grey", s=20)
+    plot.add(F_scaled[sorted_idx[0]], linewidth=5, color="red")
+    plot.add(F_scaled[sorted_idx[-1]], linewidth=5, color="blue")
+    plot.add(F_scaled[sorted_idx2[0]], linewidth=5, color="green")
+    plot.add(F_scaled[sorted_idx2[-1]], linewidth=5, color="purple")
+
+
+    plot.show()
+
+    #%%
+
+    def plot_pairwise(F_pop, F_par, names):
+        m = F_pop.shape[1]
+        fig, axes = plt.subplots(m, m, figsize=(2.6*m, 2.6*m))
+        for i in range(m):
+            for j in range(m):
+                ax = axes[i, j]
+                if i == j:
+                    ax.hist(F_pop[:, i], bins=30, alpha=0.5, color='gray')
+                    ax.hist(F_par[:, i], bins=30, alpha=0.8, color='tab:blue')
+                else:
+                    ax.scatter(F_pop[:, j], F_pop[:, i], s=6, alpha=0.25, color='gray')
+                    ax.scatter(F_par[:, j], F_par[:, i], s=10, alpha=0.8, color='tab:blue')
+                if i == m-1: ax.set_xlabel(names[j])
+                if j == 0:    ax.set_ylabel(names[i])
+        fig.tight_layout(); plt.show()
+
+    plot_pairwise(F_pop, F_pareto, obj_names)
+
+    from mpl_toolkits.mplot3d import Axes3D  # noqa
+
+    def plot_3d(F, idx=(0,1,2), c_idx=3, names=None):
+        fig = plt.figure(figsize=(7,5))
+        ax = fig.add_subplot(111, projection='3d')
+        c = F[:, c_idx]
+        sc = ax.scatter(F[:, idx[0]], F[:, idx[1]], F[:, idx[2]],
+                        c=c, cmap='viridis', s=12, alpha=0.8)
+        if names:
+            ax.set_xlabel(names[idx[0]]); ax.set_ylabel(names[idx[1]]); ax.set_zlabel(names[idx[2]])
+        cb = fig.colorbar(sc, pad=0.1); cb.set_label(names[c_idx] if names else 'color')
+        plt.tight_layout(); plt.show()
+
+    plot_3d(F_pareto, idx=(0,1,2), c_idx=3, names=obj_names)
+
+    def plot_parallel(F, names):
+        Fm = (F - F.min(0)) / np.clip((F.max(0) - F.min(0)), 1e-9, None)
+        x = np.arange(Fm.shape[1])
+        plt.figure(figsize=(9, 4.5))
+        for row in Fm:
+            plt.plot(x, row, color='tab:blue', alpha=0.15, linewidth=1)
+        plt.xticks(x, names, rotation=15)
+        plt.yticks([0,0.5,1.0]); plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+
+    plot_parallel(F_pareto, obj_names)
     
-    plt.figure(figsize=(10,4))
-    plt.plot(S_,fcof(S_).squeeze())
-    plt.show()
     
-    # plt.figure(figsize=(10,4))
-    # plt.plot(S_,loss_dim.squeeze())
-    # plt.show()
+    from glob import glob
+    def summarize_generations(dir='checkpoints'):
+        files = sorted(glob(f'{dir}/gen_*.npz'))
+        nds_cnt, best_vals = [], []
+        for f in files:
+            d = np.load(f)
+            F = d['opt_F'] if 'opt_F' in d else None
+            if F is not None and len(F):
+                nds_cnt.append(F.shape[0])
+                best_vals.append(F.min(axis=0))
+        return np.array(nds_cnt), (np.vstack(best_vals) if best_vals else None)
+
+    nds_cnt, best_vals = summarize_generations()
 
 
-#%%
-from pymoo.visualization.pcp import PCP
+    if best_vals is not None:
+        plt.figure(figsize=(7,4))
+        for i,name in enumerate(obj_names):
+            plt.plot(best_vals[:, i], label=name)
+        plt.title('Best per objective'); plt.legend(); plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
 
-F = F_pareto
-sorted_idx = np.argsort(F[:,0])
+    def plot_bearing_id_hist(X_pop, X_par, n_brg):
+        ids_pop = X_pop[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
+        ids_par = X_par[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
+        plt.figure(figsize=(7,3))
+        plt.hist(ids_pop, bins=np.arange(1,55)-0.5, alpha=0.4, label='pop')
+        plt.hist(ids_par, bins=np.arange(1,55)-0.5, alpha=0.8, label='pareto')
+        plt.xlabel('Bearing ID'); plt.ylabel('Count'); plt.legend(); plt.tight_layout(); plt.show()
 
-plot = PCP(title=("Pareto Front (Objectives)",{'pad': 30}),
-        legend=(True, {'loc': "upper left"}),
-        labels=obj_names
-        )
-plot.set_axis_style(color="grey", alpha=0.5)
-plot.add(F, color="grey", alpha=0.3)
-plot.add(F[sorted_idx[0]], linewidth=5, color="red")
-plot.add(F[sorted_idx[-1]], linewidth=5, color="blue")
-plot.show()
-
-#%%
-
-
-FF = []
-for idx in np.arange(5,405,5,dtype=int):
-    d = np.load(f'checkpoints/gen_{idx:04d}.npz')
-    F = d.get('opt_F')
-    if F is None or F.size == 0 or F.shape[1] != 6: 
-        continue
-    FF.append(F)
-F_all = np.vstack(FF)
-
-
-# d = np.load('checkpoints/latest.npz')
-# X_pop, F_pop = d['pop_X'], d['pop_F']
-# X_pareto, F_pareto = d['opt_X'], d['opt_F']
-
-
-
-#%%
-
-
-
-from pymoo.visualization.radviz import Radviz
-obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg', 'max_ampRatioSeal']
-plot = Radviz(title="Optimization",
-              legend=(True, {'loc': "upper left", 'bbox_to_anchor': (-0.1, 1.08, 0, 0)}),
-              labels=obj_names,
-              endpoint_style={"s": 70, "color": "green"})
-plot.set_axis_style(color="black", alpha=1.0)
-plot.add(F_all, color="grey", s=20)
-plot.show()
+    plot_bearing_id_hist(X_pop, X_pareto, n_brg)
 
 
 
 
 
-#%%
-
-# Plot S vs Kxx and S vs Cxx for each bearing
-plt.figure(figsize=(10,4))
-plt.subplot(1,2,1)
-for j in range(len(brgs)):
-    plt.plot(S[j], Kdim1[j, 0], label=f'Brg {int(brg_ids[j])}')  # Kxx
-plt.xlabel('Sommerfeld number S')
-plt.ylabel('Kxx [N/m]')
-plt.title('S vs Kxx')
-plt.grid(alpha=0.3)
-plt.legend(fontsize=8)
-
-plt.subplot(1,2,2)
-for j in range(len(brgs)):
-    plt.plot(S[j], Cdim[j, 0], label=f'Brg {int(brg_ids[j])}')  # Cxx
-plt.xlabel('Sommerfeld number S')
-plt.ylabel('Cxx [N·s/m]')
-plt.title('S vs Cxx')
-plt.grid(alpha=0.3)
-plt.tight_layout()
-plt.show()
-
-# Calculate total bearing power loss at operating speed index
-idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
-brg_loss_recalc = loss_brg_chk[:,:,:,idx_op].sum(axis=1).squeeze()
-
-# Quick sanity print to compare with stored objective
-print("[recalc] brg_loss (stored, recalculated) =",
-    float(F_pareto[idx_brg_wrong, 1]), float(brg_loss_recalc))
-
-
-#%%
-plt.figure()
-plt.plot(F_pareto[:,2])
+# #%%
+# plt.figure()
+# plt.plot(F_pareto[:,2])
 
 
 
 
-#%%
 
+# #%%
+# sorted_brg = np.argsort(F[:,1])
+# idx_brg_wrong = sorted_brg[0]
 
-def plot_pairwise(F_pop, F_par, names):
-    m = F_pop.shape[1]
-    fig, axes = plt.subplots(m, m, figsize=(2.6*m, 2.6*m))
-    for i in range(m):
-        for j in range(m):
-            ax = axes[i, j]
-            if i == j:
-                ax.hist(F_pop[:, i], bins=30, alpha=0.5, color='gray')
-                ax.hist(F_par[:, i], bins=30, alpha=0.8, color='tab:blue')
-            else:
-                ax.scatter(F_pop[:, j], F_pop[:, i], s=6, alpha=0.25, color='gray')
-                ax.scatter(F_par[:, j], F_par[:, i], s=10, alpha=0.8, color='tab:blue')
-            if i == m-1: ax.set_xlabel(names[j])
-            if j == 0:    ax.set_ylabel(names[i])
-    fig.tight_layout(); plt.show()
+# # Recalculate bearing data (rdc + loss) for the selected case
 
-plot_pairwise(F_pop, F_pareto, obj_names)
+# # Extract the design vector for the identified case (from Pareto set)
+# X_case = X_pareto[idx_brg_wrong:idx_brg_wrong+1]
+# pop = X_case.shape[0]
 
-from mpl_toolkits.mplot3d import Axes3D  # noqa
+# # Split variables into bearing and seal parts
+# X_brg = X_case[:, :2*n_brg].reshape(pop, n_brg, 2)
 
-def plot_3d(F, idx=(0,1,2), c_idx=3, names=None):
-    fig = plt.figure(figsize=(7,5))
-    ax = fig.add_subplot(111, projection='3d')
-    c = F[:, c_idx]
-    sc = ax.scatter(F[:, idx[0]], F[:, idx[1]], F[:, idx[2]],
-                    c=c, cmap='viridis', s=12, alpha=0.8)
-    if names:
-        ax.set_xlabel(names[idx[0]]); ax.set_ylabel(names[idx[1]]); ax.set_zlabel(names[idx[2]])
-    cb = fig.colorbar(sc, pad=0.1); cb.set_label(names[c_idx] if names else 'color')
-    plt.tight_layout(); plt.show()
-
-plot_3d(F_pareto, idx=(0,1,2), c_idx=3, names=obj_names)
-
-def plot_parallel(F, names):
-    Fm = (F - F.min(0)) / np.clip((F.max(0) - F.min(0)), 1e-9, None)
-    x = np.arange(Fm.shape[1])
-    plt.figure(figsize=(9, 4.5))
-    for row in Fm:
-        plt.plot(x, row, color='tab:blue', alpha=0.15, linewidth=1)
-    plt.xticks(x, names, rotation=15)
-    plt.yticks([0,0.5,1.0]); plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
-
-plot_parallel(F_pareto, obj_names)
-from glob import glob
-def summarize_generations(dir='checkpoints'):
-    files = sorted(glob(f'{dir}/gen_*.npz'))
-    nds_cnt, best_vals = [], []
-    for f in files:
-        d = np.load(f)
-        F = d['opt_F'] if 'opt_F' in d else None
-        if F is not None and len(F):
-            nds_cnt.append(F.shape[0])
-            best_vals.append(F.min(axis=0))
-    return np.array(nds_cnt), (np.vstack(best_vals) if best_vals else None)
-
-nds_cnt, best_vals = summarize_generations()
-
-if best_vals is not None:
-    plt.figure(figsize=(7,4))
-    for i,name in enumerate(obj_names):
-        plt.plot(best_vals[:, i], label=name)
-    plt.title('Best per objective'); plt.legend(); plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
-
-def plot_bearing_id_hist(X_pop, X_par, n_brg):
-    ids_pop = X_pop[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
-    ids_par = X_par[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
-    plt.figure(figsize=(7,3))
-    plt.hist(ids_pop, bins=np.arange(1,55)-0.5, alpha=0.4, label='pop')
-    plt.hist(ids_par, bins=np.arange(1,55)-0.5, alpha=0.8, label='pareto')
-    plt.xlabel('Bearing ID'); plt.ylabel('Count'); plt.legend(); plt.tight_layout(); plt.show()
-
-plot_bearing_id_hist(X_pop, X_pareto, n_brg)
+# # Scale bearing parameters: [id, cr_ratio]
+# x_brg = X_brg * f_brg_dim
 
 
 
+# # Compute bearing K, C, and power loss over speed
+# K_brg_chk, C_brg_chk, loss_brg_chk = model_brg.calculate_brg_rdc_batch(
+#     brgs=brgs, params_batch=x_brg, w_vec=w_vec
+# )
+# # Calculate bearing geometry and Sommerfeld number, then plot S vs K and C
+# # Vectorized geometry for the selected design
+# brg_ids = X_brg[:, :, 0].astype(int).squeeze(0)              # (n_brg,)
+# cr_ratio = (X_brg[:, :, 1] * f_brg_dim[0, 1]).squeeze(0)     # (n_brg,)
+
+# Db = np.array([b.Db for b in brgs], dtype=float)             # (n_brg,)
+# mu = np.array([b.mu for b in brgs], dtype=float)             # (n_brg,)
+# load = np.array([b.load for b in brgs], dtype=float)         # (n_brg,)
+
+# # Lookup bearing-specific parameters (Mp, LD)
+# Mp = np.array([float(model_brg.get_bearing_by_id(int(bid))['Mp']) for bid in brg_ids], dtype=float)
+# LD = np.array([float(model_brg.get_bearing_by_id(int(bid))['LD']) for bid in brg_ids], dtype=float)
+# L = LD * Db
+
+# # Clearances
+# Cr = Db * cr_ratio                                           # (n_brg,)
+# Cp = Cr / np.clip(1.0 - Mp, 1e-12, None)                     # (n_brg,)
+
+# # Sommerfeld number S = mu*w*L*Db^3 / (8*pi*load*Cp^2)
+# w = w_vec[None, :]                                           # (1, n_w)
+# num = (mu[:, None] * w) * (L[:, None] * (Db[:, None]**3))
+# den = (8.0 * np.pi) * (load[:, None] * (Cp[:, None]**2) + 1e-18)
+# S = num / den                                                # (n_brg, n_w)
+# Kdim = K_brg_chk[0]  # (n_brg, 4, n_w)
+# Cdim = C_brg_chk[0] 
+# for c_brg in range(2):
+#     fcof = model_brg.get_bearing_by_id(X_brg[0,c_brg,0])['fcof']
+    
+#     # Extract dimensional K, C for the single population
+#     S_ = S[c_brg,:]
+#     Kdim1 = Kdim[c_brg]  # (4, n_w)
+#     Cdim1 = Cdim[c_brg]  # (4, n_w)
+#     loss_dim = loss_brg_chk[:,0].squeeze()
+
+#     # plt.figure(figsize=(10,4))
+#     # plt.plot(S_,Kdim1.transpose())
+#     # plt.show()
+
+#     # plt.figure(figsize=(10,4))
+#     # plt.plot(S_,Cdim1.transpose())
+#     # plt.show()
+    
+#     plt.figure(figsize=(10,4))
+#     plt.plot(S_,fcof(S_).squeeze())
+#     plt.show()
+    
+#     # plt.figure(figsize=(10,4))
+#     # plt.plot(S_,loss_dim.squeeze())
+#     # plt.show()
+
+
+
+
+# #%%
+
+# # Plot S vs Kxx and S vs Cxx for each bearing
+# plt.figure(figsize=(10,4))
+# plt.subplot(1,2,1)
+# for j in range(len(brgs)):
+#     plt.plot(S[j], Kdim1[j, 0], label=f'Brg {int(brg_ids[j])}')  # Kxx
+# plt.xlabel('Sommerfeld number S')
+# plt.ylabel('Kxx [N/m]')
+# plt.title('S vs Kxx')
+# plt.grid(alpha=0.3)
+# plt.legend(fontsize=8)
+
+# plt.subplot(1,2,2)
+# for j in range(len(brgs)):
+#     plt.plot(S[j], Cdim[j, 0], label=f'Brg {int(brg_ids[j])}')  # Cxx
+# plt.xlabel('Sommerfeld number S')
+# plt.ylabel('Cxx [N·s/m]')
+# plt.title('S vs Cxx')
+# plt.grid(alpha=0.3)
+# plt.tight_layout()
+# plt.show()
+
+# # Calculate total bearing power loss at operating speed index
+# idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
+# brg_loss_recalc = loss_brg_chk[:,:,:,idx_op].sum(axis=1).squeeze()
+
+# # Quick sanity print to compare with stored objective
+# print("[recalc] brg_loss (stored, recalculated) =",
+#     float(F_pareto[idx_brg_wrong, 1]), float(brg_loss_recalc))
 
 
 

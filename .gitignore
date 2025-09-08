@@ -1,6 +1,7 @@
 # no dataset dir
 /dataset
 /checkpoints
+/result
 ng*
 
 # DS_Store
