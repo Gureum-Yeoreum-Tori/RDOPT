@@ -30,7 +30,13 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_files = ('20250825_T_125136',)
 # mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
 # mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
-mat_files = ('20250826_T_095326',)
+
+# mat_files = ('20250826_T_091719',)
+# mat_files = ('20250826_T_093534',)
+# mat_files = ('20250826_T_095326',)
+
+mat_files = ('20250908_T_154540','20250908_T_155223','20250908_T_155858',)
+
 
 # 파라미터 설정 (기존)
 # batch_size = 2**10
@@ -48,19 +54,20 @@ mat_files = ('20250826_T_095326',)
 # weight_decay=1e-5
 
 # 파라미터 설정
-batch_size = 2**9
+batch_size = 2**8
 criterion = nn.HuberLoss()
-epochs = 5000
-param_embedding_dim = 2**6
+criterion = nn.MSELoss()
+epochs = 2500
+param_embedding_dim = 2**7
 hidden_channels = 2**7
 n_layers = 6
 shared_out_channels = hidden_channels
-p_drop = 0.1
+p_drop = 0.0
 
 lr = 1e-4
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
-weight_decay=1e-4
+weight_decay=1e-6
 
 import json
 
@@ -166,7 +173,8 @@ class MultiHeadDeepONet(nn.Module):
         y = torch.einsum('bhn,bln->bhl', coeff, phi)  # [B, n_heads, L]
         return y
     
-for seal_idx, mat_file in enumerate(mat_files):
+# for seal_idx, mat_file in enumerate(mat_files):
+for mat_file in mat_files:
     mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
 
     print('current file: '+mat_file)
@@ -334,12 +342,13 @@ for seal_idx, mat_file in enumerate(mat_files):
             
             optimizer.zero_grad()
             loss.backward(); 
-            clip_grad_norm_(model.parameters(), max_norm=1.0) # gradient clipping
+            # clip_grad_norm_(model.parameters(), max_norm=1.0) # gradient clipping
             optimizer.step()
+            scheduler.step()
             train_loss += loss.item() * params.size(0)
             n_train += params.size(0)
         train_loss /= n_train
-        scheduler.step()
+        # scheduler.step()
         
         model.eval(); val_loss = 0.0
         n_val = 0
@@ -484,7 +493,7 @@ for seal_idx, mat_file in enumerate(mat_files):
     # plt.tight_layout(rect=(0, 0.03, 1, 0.96))
     # plt.show()
 
-    # from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
     # for coeff_idx, label in enumerate(rdc_labels):
     #     y_true = np.ravel(targets_orig[:, coeff_idx, :])
@@ -541,26 +550,83 @@ for seal_idx, mat_file in enumerate(mat_files):
     X = input_.transpose()
     pop = X.shape[0]
     n_w = w.shape[0]
-    rdc_flat  = model_seal.predict(seal_idx+1, X, w).reshape(pop, 1, 4, n_w).squeeze()
+    rdc_flat  = model_seal.predict(1, X, w).reshape(pop, 1, 4, n_w).squeeze()
     rdc_true = rdc.transpose([2,0,1])
+    
+    rdc_flat_ = np.ravel(rdc_flat)
+    rdc_true_ = np.ravel(rdc_true)
+    
+    mse = mean_squared_error(rdc_true_, rdc_flat_)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(rdc_true_, rdc_flat_)
+    r2 = r2_score(rdc_true_, rdc_flat_)
+    yrng = (rdc_true_.max() - rdc_true.min())
+    rrmse = rmse / (yrng + 1e-12)
+    mape = np.mean(np.abs((rdc_true_ - rdc_flat_) / (np.abs(rdc_true_) + 1e-12)))
+
+    print(f"[Overall] RMSE: {rmse:.6g}, MAE: {mae:.6g}, "
+        f"R^2: {r2:.6f}, rRMSE: {100*rrmse:.4f}%, MAPE: {100*mape:.4f}%")
+
+
+    abs_err = rdc_true-rdc_flat
+    rel_err = (rdc_true-rdc_flat)/np.abs(rdc_true)*1e2
+
+    for r in range(4):
+        fig = plt.figure()
+        
+        abs_err_ = abs_err[:,r]
+        rel_err_ = rel_err[:,r]
+        
+        idx_rel_sorted = np.argmax(np.abs(rel_err_),axis=1)
+        rows = np.arange(rel_err_.shape[0])
+        rels = rel_err_[rows, idx_rel_sorted]
+        abss = abs_err_[rows, idx_rel_sorted]
+        
+        idx_rel_sorted = np.flip(np.argsort(np.abs(rels)))
+        relss = rels[idx_rel_sorted]
+        absss = abss[idx_rel_sorted]
+        
+        
+        plt.subplot(311)
+        plt.plot(absss[:100],'o-')
+        plt.title("absoulte error")
+        plt.subplot(312)
+        plt.plot(relss[:100],'o-')
+        plt.ylim([-100, 100])
+        plt.title("relative error")
+        plt.subplot(313)
+        plt.plot(relss[:100],'o-')
+        plt.title("relative error")
+        plt.tight_layout()
+        
+        
         
     abs_err = rdc_true-rdc_flat
     rel_err = (rdc_true-rdc_flat)/np.abs(rdc_true)*1e2
     idx_w = -1
     for r in range(4):
         fig = plt.figure()
+        rdc_true1 = rdc_true[:,r,idx_w]
         r_e = rel_err[:,r,idx_w]
         a_e = abs_err[:,r,idx_w]
         idx_rel_sorted = np.flip(np.argsort(np.abs(r_e)))
         r_e_sorted = r_e[idx_rel_sorted]
         a_e_sorted = a_e[idx_rel_sorted]
 
-        plt.subplot(211)
-        plt.plot(a_e_sorted[:50],'o-')
+        plt.subplot(411)
+        plt.plot(rdc_true1[:100],'o-')
+        plt.title("absoulte value")
+        plt.subplot(412)
+        plt.plot(a_e_sorted[:100],'o-')
         plt.title("absoulte error")
-        plt.subplot(212)
-        plt.plot(r_e_sorted[:50],'o-')
+        plt.subplot(413)
+        plt.plot(r_e_sorted[:100],'o-')
+        plt.ylim([-100, 100])
         plt.title("relative error")
+        plt.subplot(414)
+        plt.plot(r_e_sorted[:100],'o-')
+        plt.title("relative error")
+        plt.tight_layout()
         
         
         # plt.subplot(311)
@@ -572,3 +638,5 @@ for seal_idx, mat_file in enumerate(mat_files):
         # plt.plot(rdc_flat[:,r,idx_w])
         # fig.show()
 
+
+# %%
