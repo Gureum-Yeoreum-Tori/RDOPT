@@ -46,9 +46,9 @@ bs_params = {
         'rho_seal': 850, # kg/m^3, seal fluid 
     }
 
-n_w = 14
-n_pop = 100
-n_max_gen = 400
+n_w = 7
+n_pop = 200
+n_max_gen = 500
 
 ## Select algorithm
 
@@ -171,6 +171,12 @@ LB_psr = -10;  UB_psr = 10   # -> *0.1 해서 [0,1.0]
 ## Define optimization problem with vector computation
 n_var = 2 * n_brg + 3 * n_seal
 n_objs = 6  # [total_leak, power_loss, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSeal]
+n_constr = 4 # AF, logdec, ampRatio * 2
+
+N_FWD_EVAL = 4 # forward 모드 n개만 평가
+LOGDEC_MIN = 0.0 # 대수감쇠율 > 0
+AF_MAX_ALLOW = 8.0
+RATIO_MAX = 75.0
 
 # class Output_re(Output):
 #     def __init__(self):
@@ -280,7 +286,7 @@ class RoundRepair(Repair):
 
 class RotordynamicProblem(Problem):
     def __init__(self):
-        super().__init__(n_var=n_var, n_obj=n_objs, n_constr=0, xl=self._xl(), xu=self._xu(), elementwise_evaluation=False)
+        super().__init__(n_var=n_var, n_obj=n_objs, n_constr=n_constr, xl=self._xl(), xu=self._xu(), elementwise_evaluation=False)
 
     def _xl(self):
         lb = []
@@ -340,6 +346,7 @@ class RotordynamicProblem(Problem):
             K_all=K_all,
             Ceff_all=Ceff_all,
             track=True,
+            forward=True,
         )
         
         harmonic = unbalanced_response(
@@ -411,12 +418,11 @@ class RotordynamicProblem(Problem):
             AF_max[p] = af_p
         F[:, 2] = AF_max
 
-        alpha = np.real(eigvals)  # [pop, n_w, 2n]
-        beta  = np.imag(eigvals)
-        
-        alpha8 = alpha[:,:,:8]
-        beta8  = beta[:,:,:8]
-        logdec = -2 * np.pi * alpha8 / np.sqrt(alpha8**2 + beta8**2)
+        k_use = min(N_FWD_EVAL, eigvals.shape[2])
+        alpha = np.real(eigvals[:,:,:k_use])  # [pop, n_w, 2n]
+        beta  = np.imag(eigvals[:,:,:k_use])
+
+        logdec = -2 * np.pi * alpha / np.sqrt(alpha**2 + beta**2)
         min_logdec = np.min(logdec, axis=(1, 2)) # [pop]
         F[:, 3] = -min_logdec
 
@@ -459,7 +465,14 @@ class RotordynamicProblem(Problem):
         else:
             F[:, 5] = 0.0
 
+        # Constraints g(x) <= 0
+        cv_logdec = LOGDEC_MIN - min_logdec
+        cv_af     = F[:, 2] - AF_MAX_ALLOW
+        cv_brg    = F[:, 4] - RATIO_MAX
+        cv_seal   = F[:, 5] - RATIO_MAX
         out["F"] = F
+        out["G"] = np.vstack([cv_logdec, cv_af, cv_brg, cv_seal]).T
+
 
 ## Start optimization
 sampling = IntegerRandomSampling()
