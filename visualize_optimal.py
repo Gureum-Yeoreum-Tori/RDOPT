@@ -11,6 +11,8 @@ from solver_rotordyn import eig_batch as eig
 from solver_rotordyn import unbalance_response_batch_cpu_parallel as unbalanced_response
 import time
 from scipy.signal import find_peaks
+from solver_seal import main_seal_solver
+
 
 # from pymoo.core.problem import Problem
 # from pymoo.algorithms.moo.nsga2 import NSGA2
@@ -34,7 +36,7 @@ device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is
 
 #%%
 ## Define constant values
-w_range = np.array([1000, 5000]) * np.pi / 30
+w_range = np.array([500, 8000]) * np.pi / 30
 w_oper = 3500 * np.pi / 30
 oper = {
         'w_min': w_range[0],
@@ -47,7 +49,7 @@ bs_params = {
         'rho_seal': 850, # kg/m^3, seal fluid 
     }
 
-n_w = 12
+n_w = 15
 n_pop = 200
 n_max_gen = 400
 w_vec = np.linspace(w_range[0], w_range[1], n_w)
@@ -151,6 +153,7 @@ n_objs = 6  # [total_leak, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSea
 
 #%%
 d = np.load('checkpoints/latest.npz')
+#%%
 X_pop, F_pop = d['pop_X'], d['pop_F']
 X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
@@ -158,181 +161,217 @@ obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg
 
 #%%
 
-sorted_ = np.argsort(F_pareto[:,2])
-idx_wrong = sorted_[0]
+sorted_ = np.argsort(F_pareto[:,3])
+idx_wrong = sorted_[-1]
 val_wrong = F_pareto[idx_wrong,:]
 
 X = X_pareto[idx_wrong,:]
 if X.shape[0] != 1:
     X = np.expand_dims(X,axis=0)
-    
 
 #%%
-op_view = '1'
 
-if op_view == 'check':
-    pop = X.shape[0]
-    X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
-    X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
+pop = X.shape[0]
+X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
+X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
 
-    F = np.zeros((pop, n_objs), dtype=float) # objective function value
+F = np.zeros((pop, n_objs), dtype=float) # objective function value
 
-    x_brg = X_brg * f_brg_dim
-    K_brg, C_brg, loss_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
+x_brg = X_brg * f_brg_dim
+K_brg, C_brg, loss_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
 
-    seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
-    seal_leak = np.zeros((pop, n_seal), dtype=float)
+seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
+seal_leak = np.zeros((pop, n_seal), dtype=float)
 
-    for t in range(n_type_seal):
-        idx = idx_seal[t]
-        if len(idx) == 0:
+#%%
+x_seal_test_ = np.array([100, 188,  -5]) * np.array([1e-6, 1e-6, 1e-1])
+x_seal_test = np.expand_dims(x_seal_test_,axis=0)
+rdc_flat_  = model_seal.predict(3, x_seal_test, w_vec).reshape(1, 1, 4, n_w)
+rdc_flat = rdc_flat_.squeeze()
+rdc_flat = rdc_flat.transpose()
+
+print("rdc_predict =", rdc_flat, "\n")
+
+Ds = 0.23
+Ls = 0.15
+NxSeal = 45
+mu = 1.4e-3
+rho = 850
+dp = 16000000 # 20250812_T_113003, seal 3
+
+geometry = {'hIn': x_seal_test[0,0], 'hOut': x_seal_test[0,1], 'Ds': Ds, 'Ls': Ls, 'NxSeal': NxSeal}
+fluid = {'mu': mu, 'rho': rho}
+op_conditions = {'dp': dp, 'psr': x_seal_test[0,2], 'w_vec': w_vec}
+_, rdc_solver_, _, _, _, _, _ = main_seal_solver(geometry, fluid, op_conditions)
+rdc_solver = rdc_solver_[:,2:]
+print("rdc_solver =", rdc_solver)
+
+#%%
+n_track = 4
+for t in range(n_type_seal):
+    idx = idx_seal[t]
+    if len(idx) == 0:
+        continue
+    
+    params_t = X_seal[:, idx]
+    x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
+    
+    leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
+    rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
+    
+    seal_leak[:, idx] = leak_flat
+    seal_rdc[:, idx] = rdc_flat
+
+K_seal = seal_rdc[:,:,[2, 3, 3, 2],:] * rdc_signs[None, None, :, None]
+C_seal = seal_rdc[:,:,[0, 1, 1, 0],:] * rdc_signs[None, None, :, None]
+
+K = seal_rdc[:,:,2,:].squeeze()
+k = seal_rdc[:,:,3,:].squeeze()
+C = seal_rdc[:,:,0,:].squeeze()
+c = seal_rdc[:,:,1,:].squeeze()
+
+
+K_vals = np.concatenate([K_brg, K_seal], axis=1)  # (pop, n_sup, 4, n_w)
+C_vals = np.concatenate([C_brg, C_seal], axis=1)  # (pop, n_sup, 4, n_w)
+
+# from scipy.io import savemat
+# savemat("python.mat", {
+#     "K_vals": K_vals,
+#     "C_vals": C_vals,
+# })
+
+K_all, Ceff_all = assemble_system_matrix(
+    mat_K_r, C_struct, mat_C_g, w_vec, rows_sup, cols_sup, K_vals, C_vals
+)
+
+eigvals, _ = eig(
+    M=mat_M,
+    K_all=K_all,
+    Ceff_all=Ceff_all,
+    track=True,
+)
+
+harmonic = unbalanced_response(
+    M=mat_M,
+    unb=unb,
+    K_all=K_all,
+    Ceff_all=Ceff_all,
+    w_vec=w_vec,
+)
+
+idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
+F[:, 0] = seal_leak.sum(axis=1)
+F[:, 1] = loss_brg[:,:,:,idx_op].sum(axis=1).squeeze()
+
+assert n_dof == 4 * n_node
+idx_x = np.arange(n_node) * 4
+idx_y = idx_x + 2
+Ux = harmonic[:, :, idx_x, 0]  # [pop, n_w, n_node]
+Uy = harmonic[:, :, idx_y, 0]
+amp = np.sqrt(np.abs(Ux)**2 + np.abs(Uy)**2)  # [pop, n_w, n_node]
+
+brg_nodes = np.array([b.node for b in brgs], dtype=int)
+seal_nodes = np.array([s.node for s in seals], dtype=int)
+cal_nodes = np.unique(np.concatenate([brg_nodes, seal_nodes]))
+
+eps = 1e-18
+AF_max = np.zeros(pop, dtype=float)
+
+w = w_vec
+for p in range(pop):
+    af_p = 0.0
+    A = amp[p, :, cal_nodes]  # [n_cal, n_w] due to fancy indexing
+    for c in range(len(cal_nodes)):
+        y = A[c, :]
+        if y.size < 3:
             continue
-        
-        params_t = X_seal[:, idx]
-        x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
-        
-        leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))        # [pop, m]
-        rdc_flat  = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, n_w)  # [pop, m, 4, n_w]
-        
-        seal_leak[:, idx] = leak_flat
-        seal_rdc[:, idx] = rdc_flat
-
-    K_seal = seal_rdc[:,:,[2, 3, 3, 2],:] * rdc_signs[None, None, :, None]
-    C_seal = seal_rdc[:,:,[0, 1, 1, 0],:] * rdc_signs[None, None, :, None]
-
-    K_vals = np.concatenate([K_brg, K_seal], axis=1)  # (pop, n_sup, 4, n_w)
-    C_vals = np.concatenate([C_brg, C_seal], axis=1)  # (pop, n_sup, 4, n_w)
-
-    K_all, Ceff_all = assemble_system_matrix(
-        mat_K_r, C_struct, mat_C_g, w_vec, rows_sup, cols_sup, K_vals, C_vals
-    )
-
-    eigvals, _ = eig(
-        M=mat_M,
-        K_all=K_all,
-        Ceff_all=Ceff_all,
-        track=True,
-    )
-
-    harmonic = unbalanced_response(
-        M=mat_M,
-        unb=unb,
-        K_all=K_all,
-        Ceff_all=Ceff_all,
-        w_vec=w_vec,
-    )
-
-    idx_op = int(np.argmin(np.abs(w_vec - w_oper)))
-    F[:, 0] = seal_leak.sum(axis=1)
-    F[:, 1] = loss_brg[:,:,:,idx_op].sum(axis=1).squeeze()
-
-    assert n_dof == 4 * n_node
-    idx_x = np.arange(n_node) * 4
-    idx_y = idx_x + 2
-    Ux = harmonic[:, :, idx_x, 0]  # [pop, n_w, n_node]
-    Uy = harmonic[:, :, idx_y, 0]
-    amp = np.sqrt(np.abs(Ux)**2 + np.abs(Uy)**2)  # [pop, n_w, n_node]
-
-    brg_nodes = np.array([b.node for b in brgs], dtype=int)
-    seal_nodes = np.array([s.node for s in seals], dtype=int)
-    cal_nodes = np.unique(np.concatenate([brg_nodes, seal_nodes]))
-
-    eps = 1e-18
-    AF_max = np.zeros(pop, dtype=float)
-    n_track = 4
-    w = w_vec
-    for p in range(pop):
-        af_p = 0.0
-        A = amp[p, :, cal_nodes]  # [n_cal, n_w] due to fancy indexing
-        for c in range(len(cal_nodes)):
-            y = A[c, :]
-            if y.size < 3:
+        pk, _ = find_peaks(y)
+        if pk.size == 0:
+            continue
+        for j in pk:
+            Ac = y[j]
+            if Ac <= eps:
                 continue
-            pk, _ = find_peaks(y)
-            if pk.size == 0:
-                continue
-            for j in pk:
-                Ac = y[j]
-                if Ac <= eps:
-                    continue
-                yhpp = Ac / np.sqrt(2.0)
-                # Left half-power crossing
-                if j == 0:
+            yhpp = Ac / np.sqrt(2.0)
+            # Left half-power crossing
+            if j == 0:
+                N1 = w[0]
+            else:
+                l_idx = np.where(y[:j] <= yhpp)[0]
+                if l_idx.size == 0:
                     N1 = w[0]
                 else:
-                    l_idx = np.where(y[:j] <= yhpp)[0]
-                    if l_idx.size == 0:
-                        N1 = w[0]
-                    else:
-                        i0 = l_idx[-1]
-                        x0, y0 = w[i0], y[i0]
-                        N1 = x0 + (yhpp - y0) / max(Ac - y0, eps) * (w[j] - x0)
-                # Right half-power crossing
-                if j >= y.size - 1:
+                    i0 = l_idx[-1]
+                    x0, y0 = w[i0], y[i0]
+                    N1 = x0 + (yhpp - y0) / max(Ac - y0, eps) * (w[j] - x0)
+            # Right half-power crossing
+            if j >= y.size - 1:
+                N2 = w[-1]
+            else:
+                r_idx_rel = np.where(y[j+1:] <= yhpp)[0]
+                if r_idx_rel.size == 0:
                     N2 = w[-1]
                 else:
-                    r_idx_rel = np.where(y[j+1:] <= yhpp)[0]
-                    if r_idx_rel.size == 0:
-                        N2 = w[-1]
-                    else:
-                        i1 = j + 1 + r_idx_rel[0]
-                        x1, y1 = w[i1], y[i1]
-                        N2 = x1 + (yhpp - y1) / max(Ac - y1, eps) * (w[j] - x1)
-                af_peak = w[j] / max(N2 - N1, eps)
-                if af_peak > af_p:
-                    af_p = af_peak
-        AF_max[p] = af_p
-    F[:, 2] = AF_max
+                    i1 = j + 1 + r_idx_rel[0]
+                    x1, y1 = w[i1], y[i1]
+                    N2 = x1 + (yhpp - y1) / max(Ac - y1, eps) * (w[j] - x1)
+            af_peak = w[j] / max(N2 - N1, eps)
+            if af_peak > af_p:
+                af_p = af_peak
+    AF_max[p] = af_p
+F[:, 2] = AF_max
 
-    alpha = np.real(eigvals)  # [pop, n_w, 2n]
-    beta  = np.imag(eigvals)
+alpha = np.real(eigvals)  # [pop, n_w, 2n]
+beta  = np.imag(eigvals)
 
-    alpha_selected = alpha[:,:,:n_track]
-    beta_selected  = beta[:,:,:n_track]
-    logdec = -2 * np.pi * alpha_selected / np.sqrt(alpha_selected**2 + beta_selected**2)
-    min_logdec = np.min(logdec, axis=(1, 2)) # [pop]
-    F[:, 3] = -min_logdec
+alpha_selected = alpha[:,:,:n_track]
+beta_selected  = beta[:,:,:n_track]
+logdec = -2 * np.pi * alpha_selected / np.sqrt(alpha_selected**2 + beta_selected**2)
+min_logdec = np.min(logdec, axis=(1, 2)) # [pop]
+F[:, 3] = -min_logdec
 
-    # logdec2 = -2 * np.pi * alpha8 / beta8 # almost same
-    # wn = np.sqrt(np.maximum(alpha8**2 + beta8**2, 1e-30))
-    # zeta = np.clip(-alpha8 / (wn + 1e-30), a_min=1e-12, a_max = 0.999)
-    # logdec3 = 2.0 * np.pi * zeta / np.sqrt(1.0 - zeta**2)
-    # logdec_masked = np.where(valid, logdec, np.inf)
-    # min_logdec = np.min(logdec_masked, axis=(1, 2))  # [pop]
+logdec2 = -2 * np.pi * alpha_selected / alpha_selected # almost same
+wn = np.sqrt(np.maximum(alpha_selected**2 + beta_selected**2, 1e-30))
+zeta = np.clip(-alpha_selected / (wn + 1e-30), a_min=1e-12, a_max = 0.999)
+logdec3 = 2.0 * np.pi * zeta / np.sqrt(1.0 - zeta**2)
+# logdec_masked = np.where(valid, logdec, np.inf)
+# min_logdec = np.min(logdec_masked, axis=(1, 2))  # [pop]
 
-    brg_nodes = np.array([b.node for b in brgs], dtype=int)
-    if brg_nodes.size > 0:
-        brg_ids = X_brg[:, :, 0].astype(int)                         # [pop, n_brg]
-        cr_ratio = (X_brg[:, :, 1] * f_brg_dim[0, 1]).astype(float)  # scaled
-        Db_all = np.array([b.Db for b in brgs], dtype=float)[None, :]
-        Cr = Db_all * cr_ratio                                       # [pop, n_brg]
+brg_nodes = np.array([b.node for b in brgs], dtype=int)
+if brg_nodes.size > 0:
+    brg_ids = X_brg[:, :, 0].astype(int)                         # [pop, n_brg]
+    cr_ratio = (X_brg[:, :, 1] * f_brg_dim[0, 1]).astype(float)  # scaled
+    Db_all = np.array([b.Db for b in brgs], dtype=float)[None, :]
+    Cr = Db_all * cr_ratio                                       # [pop, n_brg]
 
-        max_id = int(np.max(brg_ids)) if brg_ids.size else 0
-        mp_lookup = np.zeros(max(UB_brg_idx + 1, max_id + 1), dtype=float)
-        for bid in range(1, mp_lookup.size):
-            try:
-                mp_lookup[bid] = float(model_brg.get_bearing_by_id(bid)['Mp'])
-            except Exception:
-                mp_lookup[bid] = 0.0
-        Mp = mp_lookup[brg_ids]
-        Cp = Cr / np.clip(1.0 - Mp, 1e-9, None)                     # [pop, n_brg]
-        amp_brg = amp[:, :, brg_nodes]                               # [pop, n_w, n_brg]
-        amp_ratio_brg = (amp_brg / (Cp[:, None, :] + eps)) * 100.0
-        F[:, 4] = amp_ratio_brg.reshape(pop, -1).max(axis=1)
-    else:
-        F[:, 4] = 0.0
+    max_id = int(np.max(brg_ids)) if brg_ids.size else 0
+    mp_lookup = np.zeros(max(UB_brg_idx + 1, max_id + 1), dtype=float)
+    for bid in range(1, mp_lookup.size):
+        try:
+            mp_lookup[bid] = float(model_brg.get_bearing_by_id(bid)['Mp'])
+        except Exception:
+            mp_lookup[bid] = 0.0
+    Mp = mp_lookup[brg_ids]
+    Cp = Cr / np.clip(1.0 - Mp, 1e-9, None)                     # [pop, n_brg]
+    amp_brg = amp[:, :, brg_nodes]                               # [pop, n_w, n_brg]
+    amp_ratio_brg = (amp_brg / (Cp[:, None, :] + eps)) * 100.0
+    F[:, 4] = amp_ratio_brg.reshape(pop, -1).max(axis=1)
+else:
+    F[:, 4] = 0.0
 
-    if seal_nodes.size > 0:
-        h_in  = (X_seal[:, :, 0].astype(float) * f_seal_dim[0])   # [pop, n_seal]
-        h_out = (X_seal[:, :, 1].astype(float) * f_seal_dim[1])   # [pop, n_seal]
-        h_min = np.minimum(h_in, h_out)
-        amp_seal = amp[:, :, seal_nodes]                          # [pop, n_w, n_seal]
-        amp_ratio_seal = (amp_seal / (h_min[:, None, :] + eps)) * 100.0
-        F[:, 5] = amp_ratio_seal.reshape(pop, -1).max(axis=1)
-    else:
-        F[:, 5] = 0.0
-        
-elif op_view == 'iter':
+if seal_nodes.size > 0:
+    h_in  = (X_seal[:, :, 0].astype(float) * f_seal_dim[0])   # [pop, n_seal]
+    h_out = (X_seal[:, :, 1].astype(float) * f_seal_dim[1])   # [pop, n_seal]
+    h_min = np.minimum(h_in, h_out)
+    amp_seal = amp[:, :, seal_nodes]                          # [pop, n_w, n_seal]
+    amp_ratio_seal = (amp_seal / (h_min[:, None, :] + eps)) * 100.0
+    F[:, 5] = amp_ratio_seal.reshape(pop, -1).max(axis=1)
+else:
+    F[:, 5] = 0.0
+
+#%%
+op_view = 'iter'
+if op_view == 'iter':
     pop = X_pareto.shape[0]
     X_brg = X_pareto[:, :n_brg*2].reshape(pop, n_brg, 2)
     X_seal = X_pareto[:, n_brg*2:].reshape(pop, n_seal, 3)
@@ -499,7 +538,6 @@ elif op_view == 'iter':
         F[:, 5] = 0.0
     
 else:
-    #%%
     from pymoo.visualization.pcp import PCP
 
     sorted_idx = np.argsort(F_pareto[:,0])
@@ -530,8 +568,7 @@ else:
     # d = np.load('checkpoints/latest.npz')
     # X_pop, F_pop = d['pop_X'], d['pop_F']
     # X_pareto, F_pareto = d['opt_X'], d['opt_F']
-    
-    #%%
+
 
     from pymoo.visualization.radviz import Radviz
     obj_names = ['total_leak', 'brg_loss', 'max_AF', '-min_logdec', 'max_ampRatioBrg', 'max_ampRatioSeal']
@@ -648,7 +685,7 @@ else:
 
 
 
-# #%%
+#%%
 # plt.figure()
 # plt.plot(F_pareto[:,2])
 

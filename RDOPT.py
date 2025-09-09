@@ -33,7 +33,7 @@ import pickle
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
 ## Define constant values
-w_range = np.array([1000, 5000]) * np.pi / 30
+w_range = np.array([500, 7000]) * np.pi / 30
 w_oper = 3500 * np.pi / 30
 oper = {
         'w_min': w_range[0],
@@ -46,7 +46,7 @@ bs_params = {
         'rho_seal': 850, # kg/m^3, seal fluid 
     }
 
-n_w = 12
+n_w = 14
 n_pop = 100
 n_max_gen = 400
 
@@ -90,7 +90,7 @@ save_path  = Path("result") / res_ / rotor_sheet / date_now
 save_path.mkdir(parents=True, exist_ok=True)
 
 output_file = save_path / "result"
-hist_file = output_file+"_hist"
+hist_file = save_path / "result_hist"
 print("Result file path = ",save_path," \n")
 
 

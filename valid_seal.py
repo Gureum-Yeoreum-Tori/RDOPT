@@ -9,6 +9,8 @@ import torch.nn as nn
 from sklearn.metrics import mean_squared_error, r2_score
 import itertools
 from loader_brg_seal import SealDONModel
+from solver_seal import main_seal_solver
+
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 model_seal = SealDONModel(device=device)
 #%%
@@ -19,9 +21,10 @@ mat_files = ('20250826_T_093534',)
 mat_files = ('20250826_T_095326',)
 
 mat_files = ('20250908_T_182846','20250908_T_183632','20250908_T_203220',)
+mat_files = ('20250908_T_203220',)
 
 # w_range = np.array([1000, 6000]) * np.pi / 30
-w_range = np.array([500, 6000]) * np.pi / 30
+# w_range = np.array([500, 6000]) * np.pi / 30
 w_range = np.array([500, 8000]) * np.pi / 30
 w_oper = 3500 * np.pi / 30
 oper = {
