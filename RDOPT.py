@@ -25,10 +25,10 @@ from pymoo.operators.sampling.rnd import IntegerRandomSampling
 from pymoo.operators.crossover.pntx import TwoPointCrossover
 from pymoo.operators.mutation.pm import PolynomialMutation
 from pymoo.core.callback import Callback
-from pymoo.util.display.output import Output
-from pymoo.util.display.column import Column
+# from pymoo.util.display.output import Output
+# from pymoo.util.display.column import Column
 
-import pickle
+# import pickle
 
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
@@ -68,7 +68,8 @@ print("Importing rotor data...")
 
 n_ele, n_node, n_dof, n_add, n_brg, n_seal, rotor_elements, rotor_nodal_props, added_elements, added_props, mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb, brgs, seals, support_dofs = rotor_import(file_path=rotor_file,sheet_name=rotor_sheet,bs_params=bs_params)
 
-plot_rotor_3d(rotor_elements=rotor_elements)
+# plot_rotor_3d(rotor_elements=rotor_elements)
+
 
 matrix_params = {
     'mat_M': mat_M,
@@ -252,17 +253,17 @@ class TimerCheckpointCallback(Callback):
         except Exception as e:
             print(f"[checkpoint] Failed to save npz: {e}")
 
-    def _save_pickle(self, algorithm):
-        if not self.save_pickle:
-            return
-        try:
-            gen = int(getattr(algorithm, "n_gen", -1))
-            path = os.path.join(self.out_dir, f"algorithm_gen_{gen:04d}.pkl")
-            with open(path, "wb") as f:
-                pickle.dump(algorithm, f)
-        except Exception as e:
-            # Some algorithm objects may not be fully picklable; ignore failures.
-            print(f"[checkpoint] Pickle save skipped/failed: {e}")
+    # def _save_pickle(self, algorithm):
+    #     if not self.save_pickle:
+    #         return
+    #     try:
+    #         gen = int(getattr(algorithm, "n_gen", -1))
+    #         path = os.path.join(self.out_dir, f"algorithm_gen_{gen:04d}.pkl")
+    #         with open(path, "wb") as f:
+    #             pickle.dump(algorithm, f)
+    #     except Exception as e:
+    #         # Some algorithm objects may not be fully picklable; ignore failures.
+    #         print(f"[checkpoint] Pickle save skipped/failed: {e}")
 
     def notify(self, algorithm):
         # timing log
@@ -276,7 +277,7 @@ class TimerCheckpointCallback(Callback):
         gen = int(getattr(algorithm, "n_gen", 0) or 0)
         if gen % self.freq == 0:
             self._save_npz(algorithm)
-            self._save_pickle(algorithm)
+            # self._save_pickle(algorithm)
         
 class RoundRepair(Repair):
     def _do(self, problem, X, **kwargs):
@@ -292,16 +293,20 @@ class RotordynamicProblem(Problem):
         lb = []
         for _ in range(n_brg):
             lb += [LB_brg_idx, LB_cr]
-        for _ in range(n_seal):
-            lb += [LB_h, LB_h, LB_psr]
+        # for _ in range(n_seal):
+        #     lb += [LB_h, LB_h, LB_psr]
+        for _, s in enumerate(seals):
+            lb += [LB_h, LB_h, LB_psr - LB_psr*s.is_bush]
         return np.array(lb, dtype=int)
 
     def _xu(self):
         ub = []
         for _ in range(n_brg):
             ub += [UB_brg_idx, UB_cr]
-        for _ in range(n_seal):
-            ub += [UB_h, UB_h, UB_psr]
+        # for _ in range(n_seal):
+        #     ub += [UB_h, UB_h, UB_psr]
+        for _, s in enumerate(seals):
+            ub += [UB_h, UB_h, UB_psr - UB_psr*s.is_bush]
         return np.array(ub, dtype=int)
 
     def _evaluate(self, X, out, *args, **kwargs):

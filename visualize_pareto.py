@@ -4,10 +4,20 @@ import matplotlib.pyplot as plt
 from pymoo.visualization.pcp import PCP
 from pymoo.visualization.radviz import Radviz
 from typing import Optional
+import os
+from import_data import rotor_import
 
-n_brg = 2
-n_seal = 15
+data_dir = 'dataset/data'
+rotor_file = os.path.join(data_dir, "input_Optim_Rotor.xlsx")
+rotor_sheet = "RDOPT"
+bs_params = { 'mu_brg': 0.01, 'mu_seal': 1.4e-3, 'rho_seal': 850 }
 
+n_ele, n_node, n_dof, n_add, n_brg, n_seal, rotor_elements, rotor_nodal_props, added_elements, added_props, mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb, brgs, seals, support_dofs = rotor_import(file_path=rotor_file,sheet_name=rotor_sheet,bs_params=bs_params)
+
+from import_data import plot_rotor_2d
+plot_rotor_2d(rotor_elements, added_elements=added_elements, brgs=brgs, seals=seals, lw=1.6)
+
+#%%
 d = np.load('checkpoints/latest.npz')
 X_pop, F_pop = d['pop_X'], d['pop_F']
 X_pareto, F_pareto = d['opt_X'], d['opt_F']
@@ -137,6 +147,7 @@ def plot_bearing_id_hist(X_pop, X_par, n_brg):
 
 #%%
 sorted_idx = np.argsort(F_pareto[:,0])
+idx = sorted_idx[[0, -1]]
 # obj_signs = np.array([1, 1, 1, -1, 1, 1])
 # F_pareto = F_pareto * obj_signs[None, None, None, :, None, None]
 # F_pop = F_pop * obj_signs[None, None, None, :, None, None]
@@ -151,9 +162,9 @@ obj_names = ['total_leak', 'brg_loss', 'max_AF', 'min_logdec', 'max_ampRatioBrg'
 #         continue
 #     FF.append(F_)
 # F_all = np.vstack(FF)
-plot_PCP(F=F_pareto, names=obj_names, idx=sorted_idx[[0, 1, 2, -1]])
+plot_PCP(F=F_pareto, names=obj_names, idx=idx)
 #%%
-plot_RAD(F=F_pareto, names=obj_names, idx=sorted_idx[[0, 1, 2, -1]])
+# plot_RAD(F=F_pareto, names=obj_names, idx=idx)
 #%%
 
 # plot_pairwise(F_pop, F_pareto, obj_names)
@@ -171,12 +182,11 @@ for of in range(6):
     scaler = MinMaxScaler()
     scaler.fit(F_scaled[:,of].reshape(-1,1))
     F_scaled[:,of] = scaler.transform(F_scaled[:,of].reshape(-1,1)).squeeze()
-plot_RAD(F=F_scaled, names=obj_names, idx=sorted_idx[[0, 1, 2, -1]])
+plot_RAD(F=F_scaled, names=obj_names, idx=idx)
 
 #%%
 # Visualize unbalanced response and logarithmic decrement for selected Pareto Xs
 from collections import defaultdict
-from import_data import rotor_import
 from loader_brg_seal import BearingNondModel, SealDONModel
 from solver_rotordyn import assemble_system_matrix
 from solver_rotordyn import eig_batch as eig
@@ -186,18 +196,6 @@ from solver_rotordyn import unbalance_response_batch_cpu_parallel as unbalanced_
 w_range = np.array([500, 8000]) * np.pi / 30
 n_w = 7
 w_vec = np.linspace(w_range[0], w_range[1], n_w)
-
-# Rotor and support data
-data_dir = 'dataset/data'
-rotor_file = f"{data_dir}/input_Optim_Rotor.xlsx"
-rotor_sheet = "RDOPT"
-bs_params = { 'mu_brg': 0.01, 'mu_seal': 1.4e-3, 'rho_seal': 850 }
-(
-    n_ele, n_node, n_dof, n_add, n_brg, n_seal,
-    rotor_elements, rotor_nodal_props, added_elements, added_props,
-    mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a,
-    F_mass, F_ex, unb, brgs, seals, support_dofs
-) = rotor_import(file_path=rotor_file, sheet_name=rotor_sheet, bs_params=bs_params)
 
 # Models
 model_brg = BearingNondModel()
@@ -217,7 +215,7 @@ for i, s in enumerate(seals):
 idx_seal = [np.array(groups[t+1], dtype=int) for t in range(3)]
 
 # Select a few representative Pareto points (fast)
-sel = sorted_idx[[0, -1]] if len(sorted_idx) >= 4 else np.arange(min(4, len(sorted_idx)))
+# sel = sorted_idx[[0, -1]] if len(sorted_idx) >= 4 else np.arange(min(4, len(sorted_idx)))
 colors = ['tab:red', 'tab:blue', 'tab:green', 'tab:purple']
 
 amp_curves = []   # max amplitude over supports vs speed
@@ -225,7 +223,7 @@ logd_curves = []  # min logarithmic decrement (first few forward modes) vs speed
 labels = []
 
 #%%
-for i, pi in enumerate(sel):
+for i, pi in enumerate(idx):
     X = X_pareto[pi]
     X = X.reshape(1, -1)  # [1, n_var]
 
@@ -311,5 +309,6 @@ for i, pi in enumerate(sel):
 # plt.xlabel('Speed (rpm)'); plt.ylabel('Min logarithmic decrement')
 # plt.title('Logarithmic Decrement (selected Pareto)')
 # plt.grid(alpha=0.3); plt.legend(); plt.tight_layout(); plt.show()
+
 
 # %%
