@@ -16,7 +16,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 1. Load dataset.mat files
 data_dir = 'dataset/data/tapered_seal'
-mat_files = ('20250908_T_182846','20250908_T_183632','20250908_T_203220','20250911_T_091324',)
+mat_files = ('20250908_T_182846','20250911_T_091324','20250908_T_183632','20250908_T_203220',)
 model_seal = SealDONModel(device=device)
 
 for seal_idx, mat_file in enumerate(mat_files):

@@ -6,6 +6,8 @@ from pymoo.visualization.radviz import Radviz
 from typing import Optional
 import os
 from import_data import rotor_import
+from cycler import cycler
+from itertools import cycle
 
 data_dir = 'dataset/data'
 rotor_file = os.path.join(data_dir, "input_Optim_Rotor.xlsx")
@@ -14,8 +16,8 @@ bs_params = { 'mu_brg': 0.01, 'mu_seal': 1.4e-3, 'rho_seal': 850 }
 
 n_ele, n_node, n_dof, n_add, n_brg, n_seal, rotor_elements, rotor_nodal_props, added_elements, added_props, mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb, brgs, seals, support_dofs = rotor_import(file_path=rotor_file,sheet_name=rotor_sheet,bs_params=bs_params)
 
-from import_data import plot_rotor_2d
-plot_rotor_2d(rotor_elements, added_elements=added_elements, brgs=brgs, seals=seals, lw=1.6)
+# from import_data import plot_rotor_2d
+# plot_rotor_2d(rotor_elements, added_elements=added_elements, brgs=brgs, seals=seals, lw=1.6, save_img=True)
 
 #%%
 d = np.load('checkpoints/latest.npz')
@@ -53,7 +55,7 @@ def plot_PCP(F, names, idx: Optional[np.ndarray] = None):
                 indices = np.flatnonzero(idx_arr)
             elif idx_arr.size > 0:
                 indices = idx_arr.astype(int).ravel()
-
+    
     first_colors = ["red", "blue", "green"]
     default_cycle = plt.rcParams.get('axes.prop_cycle')
     cycle_colors = (default_cycle.by_key().get('color',
@@ -64,7 +66,7 @@ def plot_PCP(F, names, idx: Optional[np.ndarray] = None):
             color = first_colors[i]
         else:
             color = cycle_colors[(i - 3) % len(cycle_colors)]
-        plot.add(np.atleast_2d(F[idc]), linewidth=5, color=color)
+        plot.add(np.atleast_2d(F[idc]), linewidth=5, color=color, linestyle='-')
     plot.save("pareto_PCP.png", dpi=300, bbox_inches="tight")
 
     plot.show()
@@ -109,6 +111,8 @@ def plot_RAD(F, names, idx: Optional[np.ndarray] = None):
     return plot
 
 def plot_pairwise(F_pop, F_par, names):
+    import matplotlib as mpl
+    plt.rc('axes', prop_cycle=mpl.rcParamsDefault['axes.prop_cycle'])
     m = F_pop.shape[1]
     fig, axes = plt.subplots(m, m, figsize=(2.6*m, 2.6*m))
     for i in range(m):
@@ -139,6 +143,8 @@ def plot_3d(F, idx=(0,1,2), c_idx=3, names=None):
 
 from glob import glob
 def summarize_generations(dir='checkpoints'):
+    import matplotlib as mpl
+    plt.rc('axes', prop_cycle=mpl.rcParamsDefault['axes.prop_cycle'])
     files = sorted(glob(f'{dir}/gen_*.npz'))
     nds_cnt, best_vals = [], []
     for f in files:
@@ -157,6 +163,8 @@ def summarize_generations(dir='checkpoints'):
     return nds_cnt, best_vals
 
 def plot_bearing_id_hist(X_pop, X_par, n_brg):
+    import matplotlib as mpl
+    plt.rc('axes', prop_cycle=mpl.rcParamsDefault['axes.prop_cycle'])
     ids_pop = X_pop[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
     ids_par = X_par[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
     fig, ax = plt.subplots(figsize=(7,3))
@@ -245,207 +253,212 @@ labels = []
 
 #%%
 
-# def plot_harmonic(w, amp, nodes='key', fontsize=None, smooth=None):
-#     from scipy.interpolate import CubicSpline
-#     """
-#     Plot unbalanced response for selected nodes.
+def plot_harmonic(w, amp, nodes='key', fontsize=None, smooth=None):
+    from scipy.interpolate import CubicSpline
+    """
+    Plot unbalanced response for selected nodes.
 
-#     Parameters
-#     - w:            ndarray [n_w] in rad/s
-#     - amp:          ndarray [n_w, n_node] or [pop, n_w, n_node]
-#     - nodes:        selection of nodes to plot
-#                     - 'key' (default): bearings + seals + unbalance nodes
-#                     - 'all': all nodes
-#                     - 'brg', 'seal', 'unb': specific node categories
-#                     - int or list/array of ints: specific node indices (0-based)
-#     - fontsize:     label font size
-#     - smooth:       optional smoothing for curves along speed axis
-#                     - None or 0/1: no smoothing
-#                     - 'spline'/'cubic' or ('spline', n_pts): cubic spline
-#     """
-#     plt.rcParams.update({
-#         "figure.figsize": (6, 4),   # 단일 column에 맞춤
-#         "font.size": 8,                 # 본문 글자 크기와 유사
-#         "axes.labelsize": 9,            # 축 라벨은 약간 크게
-#         "xtick.labelsize": 8,
-#         "ytick.labelsize": 8,
-#         "legend.fontsize": 8,
-#         "lines.linewidth": 1.0
-#     })
+    Parameters
+    - w:            ndarray [n_w] in rad/s
+    - amp:          ndarray [n_w, n_node] or [pop, n_w, n_node]
+    - nodes:        selection of nodes to plot
+                    - 'key' (default): bearings + seals + unbalance nodes
+                    - 'all': all nodes
+                    - 'brg', 'seal', 'unb': specific node categories
+                    - int or list/array of ints: specific node indices (0-based)
+    - fontsize:     label font size
+    - smooth:       optional smoothing for curves along speed axis
+                    - None or 0/1: no smoothing
+                    - 'spline'/'cubic' or ('spline', n_pts): cubic spline
+    """
+    plt.rcParams.update({
+        "figure.figsize": (6, 4),   # 단일 column에 맞춤
+        "font.size": 8,                 # 본문 글자 크기와 유사
+        "axes.labelsize": 9,            # 축 라벨은 약간 크게
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 8,
+        "lines.linewidth": 1.0
+    })
         
-#     fig, ax = plt.subplots()
+    fig, ax = plt.subplots()
 
-#     # Normalize amp shape to [n_w, n_node]
-#     A = np.array(amp)
-#     if A.ndim == 3:
-#         A = A[0]  # use first population by default
-#     elif A.ndim != 2:
-#         raise ValueError("amp must be [n_w, n_node] or [pop, n_w, n_node]")
+    # Normalize amp shape to [n_w, n_node]
+    A = np.array(amp)
+    if A.ndim == 3:
+        A = A[0]  # use first population by default
+    elif A.ndim != 2:
+        raise ValueError("amp must be [n_w, n_node] or [pop, n_w, n_node]")
 
-#     n_w, n_node = A.shape
+    n_w, n_node = A.shape
 
-#     # Build category node sets from globals if available
-#     bearing_nodes = np.array([b.node for b in brgs], dtype=int) if 'brgs' in globals() and len(brgs) else np.array([], dtype=int)
-#     seal_nodes_g  = np.array([s.node for s in seals], dtype=int) if 'seals' in globals() and len(seals) else np.array([], dtype=int)
-#     if 'unb' in globals() and hasattr(unb, 'cases') and len(unb.cases):
-#         unb_nodes = np.unique(np.array([n for c in unb.cases for n in c.node], dtype=int))
-#     else:
-#         unb_nodes = np.array([], dtype=int)
+    # Build category node sets from globals if available
+    bearing_nodes = np.array([b.node for b in brgs], dtype=int) if 'brgs' in globals() and len(brgs) else np.array([], dtype=int)
+    seal_nodes_g  = np.array([s.node for s in seals], dtype=int) if 'seals' in globals() and len(seals) else np.array([], dtype=int)
+    if 'unb' in globals() and hasattr(unb, 'cases') and len(unb.cases):
+        unb_nodes = np.unique(np.array([n for c in unb.cases for n in c.node], dtype=int))
+    else:
+        unb_nodes = np.array([], dtype=int)
 
-#     # Determine which nodes to plot
-#     sel: np.ndarray
-#     if isinstance(nodes, str):
-#         key = nodes.lower()
-#         if key == 'key' or nodes is None:
-#             sel = np.unique(np.concatenate([bearing_nodes, seal_nodes_g, unb_nodes]))
-#         elif key in ('brg', 'bearing'):
-#             sel = bearing_nodes
-#         elif key in ('seal', 'seals'):
-#             sel = seal_nodes_g
-#         elif key in ('unb', 'unbalance', 'unbalanced'):
-#             sel = unb_nodes
-#         elif key == 'all':
-#             sel = np.arange(n_node)
-#         else:
-#             # Unknown key string -> empty selection
-#             sel = np.array([], dtype=int)
-#     else:
-#         sel = np.atleast_1d(nodes).astype(int)
-#         sel = sel[(sel >= 0) & (sel < n_node)]
+    # Determine which nodes to plot
+    sel: np.ndarray
+    if isinstance(nodes, str):
+        key = nodes.lower()
+        if key == 'key' or nodes is None:
+            sel = np.unique(np.concatenate([bearing_nodes, seal_nodes_g, unb_nodes]))
+        elif key in ('brg', 'bearing'):
+            sel = bearing_nodes
+        elif key in ('seal', 'seals'):
+            sel = seal_nodes_g
+        elif key in ('unb', 'unbalance', 'unbalanced'):
+            sel = unb_nodes
+        elif key == 'all':
+            sel = np.arange(n_node)
+        else:
+            # Unknown key string -> empty selection
+            sel = np.array([], dtype=int)
+    else:
+        sel = np.atleast_1d(nodes).astype(int)
+        sel = sel[(sel >= 0) & (sel < n_node)]
 
-#     # Assign category for each selected node (priority: bearing > seal > unbalance > other)
-#     set_brg = set(bearing_nodes.tolist())
-#     set_seal = set(seal_nodes_g.tolist())
-#     set_unb = set(unb_nodes.tolist())
+    # Assign category for each selected node (priority: bearing > seal > unbalance > other)
+    set_brg = set(bearing_nodes.tolist())
+    set_seal = set(seal_nodes_g.tolist())
+    set_unb = set(unb_nodes.tolist())
 
-#     def category(n):
-#         if n in set_brg:
-#             return 'bearing'
-#         if n in set_seal:
-#             return 'seal'
-#         if n in set_unb:
-#             return 'unbalance'
-#         return 'other'
-#     from cycler import cycler
-#     plt.rc('axes', prop_cycle=(cycler('color', ['r', 'g', 'b', 'y', 'c', 'k']) *
-#                             cycler('linestyle', ['-', '--', ':', '-.'])))
+    def category(n):
+        if n in set_brg:
+            return 'bearing'
+        if n in set_seal:
+            return 'seal'
+        if n in set_unb:
+            return 'unbalance'
+        return 'other'
 
-#     # Optional smoothing
-#     A_plot = A
-#     spline_mode = False
-#     w_use = w
-#     n_pts = max(200, n_w * 5) if 'n_w' in globals() else max(200, A.shape[0] * 5)
-#     if isinstance(smooth, str) and smooth.lower() in ('spline', 'cubic', 'cubic-spline'):
-#         spline_mode = True
-#         w_use = np.linspace(w.min(), w.max(), int(n_pts))
-#     elif isinstance(smooth, (tuple, list)) and len(smooth) >= 2 and str(smooth[0]).lower() in ('spline', 'cubic', 'cubic-spline'):
-#         spline_mode = True
-#         try:
-#             n_pts = max(10, int(smooth[1]))
-#         except Exception:
-#             n_pts = max(200, A.shape[0] * 5)
-#         w_use = np.linspace(w.min(), w.max(), int(n_pts))
+    # plt.rc('axes', prop_cycle=(cycler('color', ['r', 'g', 'b', 'y', 'c', 'k']) *
+                            # cycler('linestyle', ['-', '--', ':', '-.'])))
+    sty_cycle = cycler('color', ['r', 'g', 'b', 'y', 'c', 'k']) * cycler('linestyle', ['-', '--', ':', '-.'])
 
-#     w_rpm = w_use * 30.0 / np.pi
+    # Optional smoothing
+    A_plot = A
+    spline_mode = False
+    w_use = w
+    n_pts = max(200, n_w * 5) if 'n_w' in globals() else max(200, A.shape[0] * 5)
+    if isinstance(smooth, str) and smooth.lower() in ('spline', 'cubic', 'cubic-spline'):
+        spline_mode = True
+        w_use = np.linspace(w.min(), w.max(), int(n_pts))
+    elif isinstance(smooth, (tuple, list)) and len(smooth) >= 2 and str(smooth[0]).lower() in ('spline', 'cubic', 'cubic-spline'):
+        spline_mode = True
+        try:
+            n_pts = max(10, int(smooth[1]))
+        except Exception:
+            n_pts = max(200, A.shape[0] * 5)
+        w_use = np.linspace(w.min(), w.max(), int(n_pts))
+
+    w_rpm = w_use * 30.0 / np.pi
 
 
-#     # Plot each chosen node with category-specific linestyle and category-only legend
-#     seen_labels = set()
-#     for n in sel:
-#         cat = category(n)
-#         # Only label once per category to keep legend concise
-#         label = f"{cat.title()} {n}"
-#         lbl = None if cat in seen_labels else label
-#         if lbl is not None:
-#             seen_labels.add(label)
-#         if spline_mode:
-#             cs = CubicSpline(w, A[:, n], bc_type='natural')
-#             y_plot = cs(w_use)
-#         else:
-#             y_plot = A_plot[:, n]
-#         ax.plot(
-#             w_rpm,
-#             y_plot * 1e6,
-#             label=lbl,
-#             lw=1.8,
-#         )
-
-#     xlabel = "Rotor speed (rpm)"
-#     ax.set_xlabel(xlabel, fontsize=fontsize)
-#     ylabel = "Unbalanced response " + r'$(\mu{}\text{m})$'
-#     ax.set_ylabel(ylabel, fontsize=fontsize)
-#     ax.set_xlim([0, 7000])
-#     if len(seen_labels):
-#         ax.legend()
-#     fig.tight_layout()
-#     fig.savefig("unb_resp.png", dpi=300, bbox_inches="tight")
-#     # plt.show()
-
-# def plot_logdec_lowest(logdec_arr, eigvals_arr, w, n=4, pop_idx=0, fontsize=None):
-#     """
-#     Plot log decrement for the n modes with the lowest natural frequency
-#     (at the first speed), in ascending order.
-
-#     Parameters
-#     - logdec_arr: ndarray [pop, n_w, m] or [n_w, m]
-#     - eigvals_arr: ndarray [pop, n_w, k] (complex); uses first m columns
-#     - w: ndarray [n_w] in rad/s
-#     - n: number of lowest-frequency modes to plot
-#     - pop_idx: which population index to use (if pop dimension present)
-#     - fontsize: label font size
-#     """
-#     import matplotlib.pyplot as plt
-#     L = np.array(logdec_arr)
-#     EV = np.array(eigvals_arr)
+    # Plot each chosen node with category-specific linestyle and category-only legend
+    seen_labels = set()
     
-#     plt.rcParams.update({
-#         "figure.figsize": (6, 4),   # 단일 column에 맞춤
-#         "font.size": 8,                 # 본문 글자 크기와 유사
-#         "axes.labelsize": 9,            # 축 라벨은 약간 크게
-#         "xtick.labelsize": 8,
-#         "ytick.labelsize": 8,
-#         "legend.fontsize": 8,
-#         "lines.linewidth": 1.0
-#     })
+    for n, sty in zip(sel, cycle(sty_cycle)):
+        cat = category(n)
+        # Only label once per category to keep legend concise
+        label = f"{cat.title()} {n}"
+        lbl = None if cat in seen_labels else label
+        if lbl is not None:
+            seen_labels.add(label)
+        if spline_mode:
+            cs = CubicSpline(w, A[:, n], bc_type='natural')
+            y_plot = cs(w_use)
+        else:
+            y_plot = A_plot[:, n]
+        ax.plot(
+            w_rpm,
+            y_plot * 1e6,
+            label=lbl,
+            lw=1.8,
+            **sty,
+        )
+
+    xlabel = "Rotor speed (rpm)"
+    ax.set_xlabel(xlabel, fontsize=fontsize)
+    ylabel = "Unbalanced response " + r'$(\mu{}\text{m})$'
+    ax.set_ylabel(ylabel, fontsize=fontsize)
+    ax.set_xlim([0, 7000])
+    if len(seen_labels):
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig("unb_resp.png", dpi=300, bbox_inches="tight")
+    # plt.show()
+
+def plot_logdec_lowest(logdec_arr, eigvals_arr, w, n=4, pop_idx=0, fontsize=None):
+    """
+    Plot log decrement for the n modes with the lowest natural frequency
+    (at the first speed), in ascending order.
+
+    Parameters
+    - logdec_arr: ndarray [pop, n_w, m] or [n_w, m]
+    - eigvals_arr: ndarray [pop, n_w, k] (complex); uses first m columns
+    - w: ndarray [n_w] in rad/s
+    - n: number of lowest-frequency modes to plot
+    - pop_idx: which population index to use (if pop dimension present)
+    - fontsize: label font size
+    """
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+    
+    plt.rc('axes', prop_cycle=mpl.rcParamsDefault['axes.prop_cycle'])
+    L = np.array(logdec_arr)
+    EV = np.array(eigvals_arr)
+    
+    plt.rcParams.update({
+        "figure.figsize": (6, 4),   # 단일 column에 맞춤
+        "font.size": 8,                 # 본문 글자 크기와 유사
+        "axes.labelsize": 9,            # 축 라벨은 약간 크게
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 8,
+        "lines.linewidth": 1.0
+    })
         
-#     fig, ax = plt.subplots()
-#     plt.rc('axes', prop_cycle=plt.rcParamsDefault['axes.prop_cycle'])
+    fig, ax = plt.subplots()
 
-#     # Normalize shapes
-#     if L.ndim == 2:
-#         # assume [n_w, m]
-#         Lp = L
-#         EVp = EV[pop_idx]
-#     elif L.ndim == 3:
-#         # [pop, n_w, m]
-#         Lp = L[pop_idx]
-#         EVp = EV[pop_idx]
-#     else:
-#         raise ValueError("logdec_arr must be [n_w, m] or [pop, n_w, m]")
+    # Normalize shapes
+    if L.ndim == 2:
+        # assume [n_w, m]
+        Lp = L
+        EVp = EV[pop_idx]
+    elif L.ndim == 3:
+        # [pop, n_w, m]
+        Lp = L[pop_idx]
+        EVp = EV[pop_idx]
+    else:
+        raise ValueError("logdec_arr must be [n_w, m] or [pop, n_w, m]")
 
-#     n_w, m = Lp.shape
-#     # Use the corresponding first m modes of eigvals for wn
-#     EVm = EVp[:, :m]
-#     # Natural frequencies at first speed index
-#     alpha0 = np.real(EVm[0])
-#     beta0 = np.imag(EVm[0])
-#     wn0 = np.sqrt(np.maximum(alpha0*alpha0 + beta0*beta0, 0.0))
-#     # Sort indices by ascending natural frequency
-#     order = np.argsort(wn0)
-#     sel = order[:max(1, int(n))]
+    n_w, m = Lp.shape
+    # Use the corresponding first m modes of eigvals for wn
+    EVm = EVp[:, :m]
+    # Natural frequencies at first speed index
+    alpha0 = np.real(EVm[0])
+    beta0 = np.imag(EVm[0])
+    wn0 = np.sqrt(np.maximum(alpha0*alpha0 + beta0*beta0, 0.0))
+    # Sort indices by ascending natural frequency
+    order = np.argsort(wn0)
+    sel = order[:max(1, int(n))]
 
-#     x_rpm = w * 30.0 / np.pi
-#     for i, idx in enumerate(sel):
-#         ax.plot(x_rpm, Lp[:, idx], label=f"Mode {i+1}", lw=1.8)
+    x_rpm = w * 30.0 / np.pi
+    for i, idx in enumerate(sel):
+        ax.plot(x_rpm, Lp[:, idx], label=f"Mode {i+1}", lw=1.8)
 
-#     ax.axhline(0.1, color='red', lw=1.5, zorder=1, linestyle='-')
-#     ax.set_xlabel("Rotor speed (rpm)", fontsize=fontsize)
-#     ax.set_ylabel(r'$\delta{}$', fontsize=fontsize)
-#     ax.set_ylim([-0.1, 2.0])
-#     ax.set_xlim([0, 7000])
-#     ax.legend()
-#     fig.tight_layout()
-#     fig.savefig("log_dec.png", dpi=300, bbox_inches="tight")
+    ax.axhline(0.1, color='red', lw=1.5, zorder=1, linestyle='-')
+    ax.set_xlabel("Rotor speed (rpm)", fontsize=fontsize)
+    ax.set_ylabel(r'$\delta{}$', fontsize=fontsize)
+    ax.set_ylim([-0.1, 2.0])
+    ax.set_xlim([0, 7000])
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig("log_dec.png", dpi=300, bbox_inches="tight")
 #%%
 
 for i, pi in enumerate(idx):
@@ -510,12 +523,12 @@ for i, pi in enumerate(idx):
         logd_curves.append(np.min(logdec, axis=1))
     labels.append(f"idx {int(pi)}")
     
-    # plot_harmonic(w=w_vec, amp=amp.transpose(), smooth='spline', nodes='seal')
-    # plot_logdec_lowest(logdec_arr=logdec, eigvals_arr=eigvals, w=w_vec, n=4, pop_idx=0)
+    plot_harmonic(w=w_vec, amp=amp.transpose(), smooth='spline', nodes='seal')
+    plot_logdec_lowest(logdec_arr=logdec, eigvals_arr=eigvals, w=w_vec, n=4, pop_idx=0)
     
-    plt.figure()
-    plt.plot(w_vec*30/np.pi,amp.transpose()*1e6)
-    plt.show()
+    # plt.figure()
+    # plt.plot(w_vec*30/np.pi,amp.transpose()*1e6)
+    # plt.show()
     
     # plt.figure()
     # plt.plot(w_vec,logdec)

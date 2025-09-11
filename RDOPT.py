@@ -104,7 +104,7 @@ bs_params = {
         'rho_seal': 850, # kg/m^3, seal fluid 
     }
 
-n_w = 15
+n_w = 11
 n_pop = 200
 n_max_gen = 500
 
@@ -185,7 +185,8 @@ model_seal_leak = SealLeakModel(device=device)
 # rotordynamic coefficient = (n_pop*n_seal, 4, n_w), order = [C c K k]
 print("Bearing and Seal models loaded\n")
 
-n_type_seal = 3 # seal types
+unique_seals = {s.SealNet for s in seals}
+n_type_seal = len(unique_seals)
 
 groups = defaultdict(list)
 for i, s in enumerate(seals):

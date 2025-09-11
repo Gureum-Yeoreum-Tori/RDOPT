@@ -29,22 +29,22 @@ data_dir = 'dataset/data/tapered_seal'
 # mat_files = ('20250825_T_123550',)
 # mat_files = ('20250825_T_125136',)
 # mat_files = ('20250825_T_120952','20250825_T_123550','20250825_T_125136',)
-mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
+# mat_files = ('20250826_T_091719','20250826_T_093534','20250826_T_095326',)
 # mat_files = ('20250826_T_091719',)
-
+mat_files = ('20250908_T_182846','20250911_T_091324','20250908_T_183632','20250908_T_203220',)
 # 파라미터 설정
 # 파라미터 설정
-batch_size = 2**10
+batch_size = 2**9
 criterion = nn.MSELoss()
-epochs = 5000
+epochs = 2500
 hidden_channels = 2**6
-n_layers = 5
+n_layers = 4
 p_drop=0.0
 
 lr = 1e-4
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
-weight_decay=1e-5
+weight_decay=1e-6
 
 import json
 
