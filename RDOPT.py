@@ -27,10 +27,68 @@ from pymoo.operators.mutation.pm import PolynomialMutation
 from pymoo.core.callback import Callback
 # from pymoo.util.display.output import Output
 # from pymoo.util.display.column import Column
+from solver_seal import main_seal_solver
 
-# import pickle
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import psutil
 
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+n_physical = psutil.cpu_count(logical=False)  
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+# ---- Lightweight line-profiler toggle (no external deps) ----
+# Enable with env var: RDOPT_PROFILE=1 (optional RDOPT_PROFILE_TOP=N)
+PROFILE_EVAL = bool(int(os.getenv("RDOPT_PROFILE", "0")))
+PROFILE_EVAL_TOP = int(os.getenv("RDOPT_PROFILE_TOP", "40"))
+_PROFILE_EVAL_DONE = False
+_BENCH_SEAL_SOLVER_DONE = False
+def _profile_lines(func, *args, top=40, **kwargs):
+    """Minimal line-level profiler for a single function call.
+    Prints top lines by cumulative time within that function only.
+    """
+    import sys, time as _time, linecache
+    code = func.__code__
+    filename = code.co_filename
+    timings = {}
+    last_ts = None
+    last_lineno = None
+    def local_tracer(frame, event, arg):
+        nonlocal last_ts, last_lineno
+        if event == 'line':
+            now = _time.perf_counter()
+            if last_ts is not None and last_lineno is not None:
+                timings[last_lineno] = timings.get(last_lineno, 0.0) + (now - last_ts)
+            last_ts = now
+            last_lineno = frame.f_lineno
+        elif event == 'return':
+            now = _time.perf_counter()
+            if last_ts is not None and last_lineno is not None:
+                timings[last_lineno] = timings.get(last_lineno, 0.0) + (now - last_ts)
+            return None
+        return local_tracer
+    def global_tracer(frame, event, arg):
+        if event == 'call' and frame.f_code is code:
+            return local_tracer
+        return None
+    old_tracer = sys.getprofile()
+    try:
+        sys.settrace(global_tracer)
+        result = func(*args, **kwargs)
+    finally:
+        sys.settrace(None)
+    # Print report
+    items = sorted(timings.items(), key=lambda x: x[1], reverse=True)[:max(1, int(top))]
+    total = sum(timings.values()) or 1e-12
+    print("\n[RDOPT] _evaluate line profile (top {} lines)".format(len(items)))
+    for lineno, t in items:
+        src = linecache.getline(filename, lineno).rstrip()
+        pct = 100.0 * t / total
+        print(f"  {os.path.basename(filename)}:{lineno:>4d}  {t:>8.4f}s  ({pct:5.1f}%)  | {src}")
+    print(f"[RDOPT] _evaluate total measured time: {total:.4f}s\n")
+    return result
 
 ## Define constant values
 w_range = np.array([500, 7000]) * np.pi / 30
@@ -41,12 +99,12 @@ oper = {
         'range': w_oper,
     }
 bs_params = {
-        'mu_brg': 0.01, # Pa s, bearing fluid 
+        'mu_brg': 0.025, # Pa s, bearing fluid 
         'mu_seal': 1.4e-3, # Pa s, seal fluid 
         'rho_seal': 850, # kg/m^3, seal fluid 
     }
 
-n_w = 7
+n_w = 15
 n_pop = 200
 n_max_gen = 500
 
@@ -88,7 +146,6 @@ from pathlib import Path
 date_now   = datetime.now().strftime("%y%m%d_T_%H%M%S")
 res_       = "rotordyn"
 save_path  = Path("result") / res_ / rotor_sheet / date_now
-save_path.mkdir(parents=True, exist_ok=True)
 
 output_file = save_path / "result"
 hist_file = save_path / "result_hist"
@@ -140,6 +197,16 @@ idx_seal = [np.array(groups[t+1], dtype=int) for t in range(n_type_seal)]
 f_seal_dim = [1e-6, 1e-6, 1e-1]
 rdc_signs = np.array([1, 1, -1, 1])
 
+# --- helper for CPU-parallel seal solver benchmark (must be top-level picklable) ---
+def _seal_solver_task(task):
+    geometry, fluid, op_conditions = task
+    try:
+        # compute and discard results; timing handled outside
+        main_seal_solver(geometry=geometry, fluid=fluid, op_conditions=op_conditions)
+        return 0
+    except Exception:
+        return 1
+
 # example
 # h_in  = np.random.randint(100, 500, size=(n_pop, n_seal, 1))
 # h_out = np.random.randint(100, 500, size=(n_pop, n_seal, 1))
@@ -172,10 +239,10 @@ LB_psr = -10;  UB_psr = 10   # -> *0.1 해서 [0,1.0]
 ## Define optimization problem with vector computation
 n_var = 2 * n_brg + 3 * n_seal
 n_objs = 6  # [total_leak, power_loss, max_AF, -min_logdec, max_ampRatioBrg, max_ampRatioSeal]
-n_constr = 4 # AF, logdec, ampRatio * 2
+n_constr = 5 # AF, logdec, ampRatio * 2, separation margin
 
 N_FWD_EVAL = 4 # forward 모드 n개만 평가
-LOGDEC_MIN = 0.0 # 대수감쇠율 > 0
+LOGDEC_MIN = 0.1 # 대수감쇠율 > 0
 AF_MAX_ALLOW = 8.0
 RATIO_MAX = 75.0
 
@@ -310,6 +377,13 @@ class RotordynamicProblem(Problem):
         return np.array(ub, dtype=int)
 
     def _evaluate(self, X, out, *args, **kwargs):
+        global _PROFILE_EVAL_DONE
+        if PROFILE_EVAL and not _PROFILE_EVAL_DONE:
+            _PROFILE_EVAL_DONE = True
+            return _profile_lines(self._evaluate_impl, X, out, *args, top=PROFILE_EVAL_TOP, **kwargs)
+        return self._evaluate_impl(X, out, *args, **kwargs)
+    
+    def _evaluate_impl(self, X, out, *args, **kwargs):
         pop = X.shape[0]
         X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
         X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
@@ -322,6 +396,7 @@ class RotordynamicProblem(Problem):
         seal_rdc = np.zeros((pop, n_seal, 4, n_w), dtype=float)
         seal_leak = np.zeros((pop, n_seal), dtype=float)
         
+        t0 = time.time()
         for t in range(n_type_seal):
             idx = idx_seal[t]
             if len(idx) == 0:
@@ -335,6 +410,83 @@ class RotordynamicProblem(Problem):
             
             seal_leak[:, idx] = leak_flat
             seal_rdc[:, idx] = rdc_flat
+        t1 = time.time()
+        t_elapsed = t1 - t0
+        print(t_elapsed)
+        
+        # 임시 벤치마크: 한 세대(pop)의 모든 씰에 대해
+        # 수치 솔버(main_seal_solver)로 누설량/동특성 예측 시간을 측정하고
+        # 위 DeepONet 추론 시간(t_elapsed)과 비교 출력
+        try:
+            BENCH_ON = bool(int(os.getenv("RDOPT_BENCH_SEAL_SOLVER", "0")))
+        except Exception:
+            BENCH_ON = True
+        global _BENCH_SEAL_SOLVER_DONE
+        if BENCH_ON and not _BENCH_SEAL_SOLVER_DONE:
+            _BENCH_SEAL_SOLVER_DONE = True  # 한 번만 수행
+            t0_solver = time.time()
+            NX_SEAL_BENCH = 15  # 빠른 벤치를 위해 비교적 작은 격자
+            tasks = []
+            for t in range(n_type_seal):
+                idx = idx_seal[t]
+                if len(idx) == 0:
+                    continue
+                params_t = X_seal[:, idx]                      # [pop, m, 3]
+                x_seal_dim = (params_t.reshape(-1, 3) * f_seal_dim)  # [pop*m, 3]
+                m = len(idx)
+                for i in range(pop):
+                    for j, s_local in enumerate(idx):
+                        pos = i * m + j
+                        hIn  = float(x_seal_dim[pos, 0])
+                        hOut = float(x_seal_dim[pos, 1])
+                        psr  = float(x_seal_dim[pos, 2])
+                        s_obj = seals[s_local]
+                        geometry = {
+                            'hIn': hIn,
+                            'hOut': hOut,
+                            'Ds': float(s_obj.Ds),
+                            'Ls': float(s_obj.Ls),
+                            'NxSeal': NX_SEAL_BENCH,
+                        }
+                        fluid = {
+                            'mu': float(s_obj.mu),
+                            'rho': float(s_obj.rho),
+                        }
+                        op_conditions = {
+                            'dp': float(s_obj.dp),
+                            'psr': psr,
+                            'w_vec': w_vec,
+                        }
+                        tasks.append((geometry, fluid, op_conditions))
+
+            # CPU 병렬 실행 옵션
+            # n_workers_env = os.getenv("RDOPT_BENCH_NPROC", "")
+            n_workers_env = n_physical
+            try:
+                n_workers = int(n_workers_env) if n_workers_env else (os.cpu_count() or 1)
+            except Exception:
+                n_workers = os.cpu_count() or 1
+            n_workers = max(1, n_workers)
+            use_parallel = (os.getenv("RDOPT_BENCH_PARALLEL", "1") != "0") and n_workers > 1
+
+            if use_parallel and len(tasks) > 0:
+                try:
+                    chunksize = max(1, len(tasks) // (n_workers * 4))
+                    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+                        for _ in ex.map(_seal_solver_task, tasks, chunksize=chunksize):
+                            pass
+                except Exception as e:
+                    print(f"[seal-timing] parallel failed, fallback to serial: {e}")
+                    for task in tasks:
+                        _seal_solver_task(task)
+            else:
+                for task in tasks:
+                    _seal_solver_task(task)
+
+            t1_solver = time.time()
+            t_solver = t1_solver - t0_solver
+            speed_ratio = (t_solver / max(t_elapsed, 1e-12))
+            print(f"[seal-timing] DeepONet: {t_elapsed:.4f}s, Solver: {t_solver:.4f}s, x{speed_ratio:.1f} slower")
         
         K_seal = seal_rdc[:,:,[2, 3, 3, 2],:] * rdc_signs[None, None, :, None]
         C_seal = seal_rdc[:,:,[0, 1, 1, 0],:] * rdc_signs[None, None, :, None]
@@ -379,6 +531,9 @@ class RotordynamicProblem(Problem):
 
         eps = 1e-18
         AF_max = np.zeros(pop, dtype=float)
+        # For separation margin: collect peak centers and AF per peak for nearest peak logic
+        peak_centers_list = [[] for _ in range(pop)]  # angular speed of peaks
+        peak_af_list = [[] for _ in range(pop)]       # AF at those peaks
         w = w_vec
         for p in range(pop):
             af_p = 0.0
@@ -418,6 +573,9 @@ class RotordynamicProblem(Problem):
                             x1, y1 = w[i1], y[i1]
                             N2 = x1 + (yhpp - y1) / max(Ac - y1, eps) * (w[j] - x1)
                     af_peak = w[j] / max(N2 - N1, eps)
+                    # record peak center and AF for separation margin evaluation
+                    peak_centers_list[p].append(w[j])
+                    peak_af_list[p].append(af_peak)
                     if af_peak > af_p:
                         af_p = af_peak
             AF_max[p] = af_p
@@ -475,8 +633,57 @@ class RotordynamicProblem(Problem):
         cv_af     = F[:, 2] - AF_MAX_ALLOW
         cv_brg    = F[:, 4] - RATIO_MAX
         cv_seal   = F[:, 5] - RATIO_MAX
+
+        # Separation margin constraint per API guideline
+        # No margin required if AF_at_nearest < 2.5. Otherwise required margin depends on
+        # location of nearest critical relative to operating range.
+        wmin = w_range[0]
+        wmax = w_range[1]
+        cv_sm = np.zeros(pop, dtype=float)
+        for p in range(pop):
+            peaks_w = np.array(peak_centers_list[p], dtype=float)
+            peaks_af = np.array(peak_af_list[p], dtype=float)
+            if peaks_w.size == 0:
+                cv_sm[p] = 0.0  # no detected peaks -> treat as satisfied
+                continue
+            # Compute separation from operating range for each peak
+            # distance outside range (0 if inside)
+            dist_below = np.maximum(0.0, wmin - peaks_w)
+            dist_above = np.maximum(0.0, peaks_w - wmax)
+            dist_to_range = dist_below + dist_above
+
+            # Find nearest peak to the operating range (inside yields distance 0)
+            k = int(np.argmin(dist_to_range))
+            Nc = float(peaks_w[k])
+            AFc = float(peaks_af[k])
+
+            # Measured margin in percent relative to operating speed w_oper
+            if Nc < wmin:
+                sm_meas = (wmin - Nc) / w_oper * 100.0
+                location = 'below'
+            elif Nc > wmax:
+                sm_meas = (Nc - wmax) / w_oper * 100.0
+                location = 'above'
+            else:
+                sm_meas = 0.0
+                location = 'inside'
+
+            # Required margin per AF and location
+            if AFc < 2.5:
+                sm_req = 0.0
+            else:
+                base = 17.0 * (1.0 - 1.0 / max(AFc - 1.5, 1e-12))
+                if location == 'below':
+                    sm_req = max(base, 16.0)
+                elif location == 'above':
+                    sm_req = max(10.0 + base, 26.0)
+                else:  # inside operating range is not allowed unless sm_req == 0
+                    # choose more conservative branch (treat as below for requirement), but measured=0 typically fails
+                    sm_req = max(base, 16.0)
+
+            cv_sm[p] = sm_req - sm_meas
         out["F"] = F
-        out["G"] = np.vstack([cv_logdec, cv_af, cv_brg, cv_seal]).T
+        out["G"] = np.vstack([cv_logdec, cv_af, cv_brg, cv_seal, cv_sm]).T
 
 
 ## Start optimization
@@ -542,7 +749,7 @@ t_elapsed = t_end - t_start
 print("Optimization completed!")
 print("elapsed time =",f"{t_elapsed:.2f}","sec\n")
 
-
+save_path.mkdir(parents=True, exist_ok=True)
 np.savez(output_file.with_suffix(".npz"), X=res.X, F=res.F, OPT = res.opt, POP = res.pop)
 np.savez(hist_file.with_suffix(".npz"), HISTORY = res.history)
 
