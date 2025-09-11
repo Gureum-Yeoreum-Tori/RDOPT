@@ -10,6 +10,8 @@
     "h5web.h5web",
     "ms-vscode.data-wrangler",
     "percy.vscode-numpy-viewer",
-    "google.geminicodeassist",
+    "kevinrose.vsc-python-indent",
+    "oderwat.indent-rainbow",
+    "h5web.vscode-h5web",
   ]
 }
