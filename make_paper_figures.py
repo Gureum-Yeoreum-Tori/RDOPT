@@ -33,10 +33,10 @@ figsize_F = (6.8, 4.2) # single column
 figsize_SC = (6, 3.7) # single column
 figsize_SC_two_third = (4, 3.7) # single column
 figsize_SC_one_third = (2.1, 3.7) # single column
-figsize_SC_two_third_s = (4, 2.4) # single column, short
-figsize_SC_one_third_s = (2.1, 2.4) # single column, short
+figsize_SC_two_third_s = (4.2, 2.4) # single column, short
+figsize_SC_one_third_s = (2.4, 2.4) # single column, short
 figsize_SC_s = (6, 2.8) # single column, short
-figsize_DC = (3.1, 1.94) # double column
+figsize_DC = (3.3, 2.06) # double column
 # figsize_DC_b = (3.3, 2.06) # double column, big
 figsize_DC_b = (3.5, 2.18) # double column, big
 figsize_DC_tall = (3.3, 3.3) # double column
@@ -386,6 +386,7 @@ def pareto_plot_PCP(F, names, idx: Optional[np.ndarray] = None, out_path="pareto
     for i, idc in enumerate(indices):
 
         plot.add(np.atleast_2d(F[idc]), linewidth=3, linestyle='-')
+    # plot.save(out_path, dpi=600, bbox_inches="tight")
     plot.save(out_path, dpi=600, bbox_inches="tight")
 
     plot.show()
@@ -456,8 +457,8 @@ def save_optimization_plots(checkpoint_path, n_brg):
     # sel = sel[[0, 1, min(len(sel)-1, len(sel)-1)]] if len(sel) >= 3 else sel
     sel = sel[[0, -1]]
 
-    # pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel,
-    #                 figsize=figsize_SC_two_third_s)
+    pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel,
+                    figsize=figsize_SC_two_third_s)
     
     # if pareto_plot_PCP is not None:
     #     # pareto_plot_PCP(F=F_pareto_corrected[:,:2], names=obj_names[:2],
@@ -467,10 +468,10 @@ def save_optimization_plots(checkpoint_path, n_brg):
     #     print("[warn] pareto PCP helper not available; skipping PCP figure.")
         
 
-    pareto_plot_RAD(F=F_pareto_corrected, 
-                    names=obj_names, 
-                    idx=sel,
-                    figsize=figsize_DC_b)
+    # pareto_plot_RAD(F=F_pareto_corrected, 
+    #                 names=obj_names, 
+    #                 idx=sel,
+    #                 figsize=figsize_DC_b)
     # if pareto_plot_RAD is not None:
     #     pareto_plot_RAD(F=F_pareto_corrected, names=obj_names, idx=sel)
     # else:
@@ -483,64 +484,64 @@ def save_optimization_plots(checkpoint_path, n_brg):
     #     print("[warn] bearing histogram helper not available; skipping bearing history figure.")
 
 
-def save_nn_validation(w_vec, out_dir='.'):
-    if main_seal_solver is None:
-        print('[warn] solver_seal.main_seal_solver not available; skipping NN validation figures.')
-        return
-    model_seal = SealDONModel()
-    model_leak = SealLeakModel()
+# def save_nn_validation(w_vec, out_dir='.'):
+#     if main_seal_solver is None:
+#         print('[warn] solver_seal.main_seal_solver not available; skipping NN validation figures.')
+#         return
+#     model_seal = SealDONModel()
+#     model_leak = SealLeakModel()
 
-    # Example tapered seal geometry (similar to visualize_optimal.py)
-    # Units already in SI
-    Ds = 0.23
-    Ls = 0.15
-    NxSeal = 45
-    mu = 1.4e-3
-    rho = 850
-    dp = 16_000_000
-    # geometry params: [h_in (um), h_out (um), psr*10]
-    x_seal_um = np.array([100, 188, -5.0])
-    x_seal = np.array([x_seal_um[0]*1e-6, x_seal_um[1]*1e-6, x_seal_um[2]*1e-1])[None, :]
+#     # Example tapered seal geometry (similar to visualize_optimal.py)
+#     # Units already in SI
+#     Ds = 0.23
+#     Ls = 0.15
+#     NxSeal = 45
+#     mu = 1.4e-3
+#     rho = 850
+#     dp = 16_000_000
+#     # geometry params: [h_in (um), h_out (um), psr*10]
+#     x_seal_um = np.array([100, 188, -5.0])
+#     x_seal = np.array([x_seal_um[0]*1e-6, x_seal_um[1]*1e-6, x_seal_um[2]*1e-1])[None, :]
 
-    # Predict by networks (use model_id=3 by default; adjust if needed)
-    rdc_pred = model_seal.predict(3, x_seal, w_vec)[0]  # [4, n_w] → C,c,K,k
-    leak_pred = model_leak.predict(3, x_seal)[0, 0]
+#     # Predict by networks (use model_id=3 by default; adjust if needed)
+#     rdc_pred = model_seal.predict(3, x_seal, w_vec)[0]  # [4, n_w] → C,c,K,k
+#     leak_pred = model_leak.predict(3, x_seal)[0, 0]
 
-    geometry = {'hIn': x_seal[0, 0], 'hOut': x_seal[0, 1], 'Ds': Ds, 'Ls': Ls, 'NxSeal': NxSeal}
-    fluid = {'mu': mu, 'rho': rho}
-    op_conditions = {'dp': dp, 'psr': x_seal[0, 2], 'w_vec': w_vec}
-    Leak, RDC, *_ = main_seal_solver(geometry, fluid, op_conditions)
-    rdc_true = RDC[:, 2:]  # C,c,K,k
+#     geometry = {'hIn': x_seal[0, 0], 'hOut': x_seal[0, 1], 'Ds': Ds, 'Ls': Ls, 'NxSeal': NxSeal}
+#     fluid = {'mu': mu, 'rho': rho}
+#     op_conditions = {'dp': dp, 'psr': x_seal[0, 2], 'w_vec': w_vec}
+#     Leak, RDC, *_ = main_seal_solver(geometry, fluid, op_conditions)
+#     rdc_true = RDC[:, 2:]  # C,c,K,k
 
-    rpm = w_vec * 30.0 / np.pi
+#     rpm = w_vec * 30.0 / np.pi
 
-    # 1) Leakage: solver vs. network (network gives single value → horizontal)
-    _default_rcparams()
-    fig, ax = plt.subplots()
-    ax.plot(rpm, Leak, 'k-', lw=1.6, label='Solver')
-    ax.hlines(leak_pred, xmin=rpm.min(), xmax=rpm.max(), colors='tab:blue', linestyles='--', lw=1.6, label='Network')
-    ax.set_xlabel('Speed (RPM)')
-    ax.set_ylabel('Leakage flow rate [kg/s]')
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, 'nn_leak_validation.png'), dpi=600, bbox_inches='tight')
+#     # 1) Leakage: solver vs. network (network gives single value → horizontal)
+#     _default_rcparams()
+#     fig, ax = plt.subplots()
+#     ax.plot(rpm, Leak, 'k-', lw=1.6, label='Solver')
+#     ax.hlines(leak_pred, xmin=rpm.min(), xmax=rpm.max(), colors='tab:blue', linestyles='--', lw=1.6, label='Network')
+#     ax.set_xlabel('Speed (RPM)')
+#     ax.set_ylabel('Leakage flow rate [kg/s]')
+#     ax.grid(True, alpha=0.3)
+#     ax.legend()
+#     fig.tight_layout()
+#     fig.savefig(os.path.join(out_dir, 'nn_leak_validation.png'), dpi=600, bbox_inches='tight')
 
-    # 2) RDC curves: each channel C,c,K,k vs speed
-    labels = ['C', 'c', 'K', 'k']
-    _default_rcparams()
-    fig, axs = plt.subplots(2, 2, figsize=(7, 5))
-    axs = axs.ravel()
-    for i in range(4):
-        axs[i].plot(rpm, rdc_true[:, i], 'k-', lw=1.6, label='Solver')
-        axs[i].plot(rpm, rdc_pred[i, :], 'tab:blue', lw=1.6, linestyle='--', label='Network')
-        axs[i].set_xlabel('Speed (RPM)')
-        axs[i].set_ylabel(labels[i])
-        axs[i].grid(True, alpha=0.3)
-        if i == 0:
-            axs[i].legend(loc='best')
-    fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, 'nn_rdc_validation.png'), dpi=600, bbox_inches='tight')
+#     # 2) RDC curves: each channel C,c,K,k vs speed
+#     labels = ['C', 'c', 'K', 'k']
+#     _default_rcparams()
+#     fig, axs = plt.subplots(2, 2, figsize=(7, 5))
+#     axs = axs.ravel()
+#     for i in range(4):
+#         axs[i].plot(rpm, rdc_true[:, i], 'k-', lw=1.6, label='Solver')
+#         axs[i].plot(rpm, rdc_pred[i, :], 'tab:blue', lw=1.6, linestyle='--', label='Network')
+#         axs[i].set_xlabel('Speed (RPM)')
+#         axs[i].set_ylabel(labels[i])
+#         axs[i].grid(True, alpha=0.3)
+#         if i == 0:
+#             axs[i].legend(loc='best')
+#     fig.tight_layout()
+#     fig.savefig(os.path.join(out_dir, 'nn_rdc_validation.png'), dpi=600, bbox_inches='tight')
 
 
 # def run():
@@ -651,7 +652,6 @@ X_init = build_initial_X(ctx['n_brg'], ctx['n_seal']).astype(float)
 eig_init, amp_init = analyze_design(X_init, ctx, w_vec)
 L_init = compute_logdec(eig_init)
 
-
 # --- Optimized design: pick one pareto solution ---
 try:
     d = np.load('checkpoints/latest.npz')
@@ -668,9 +668,10 @@ except Exception:
 #%%
 # plot_campbell(eig_init, w_vec, out_path='initial_campbell.png')
 # plot_logdec_lowest(L_init, eig_init, w_vec, out_path='initial_logdec.png', n=4)
-# # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance_brg.png', nodes='brg')
-# # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance_seal.png', nodes='seal', figsize=figsize_DC_tall)
-# # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key', figsize=figsize_SC_s)
+
+# plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance_brg.png', nodes='brg')
+# plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance_seal.png', nodes='seal', figsize=figsize_DC_tall)
+# plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key', figsize=figsize_SC_s)
 # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key', figsize=(6, 2.35))
 
 
@@ -680,20 +681,20 @@ except Exception:
 
 
 #%%
-# plt.figure(figsize=figsize_SC_one_third_s)
-# plt.scatter(F_pop[:, 0], F_pop[:, 1], s=10, alpha=0.5,facecolors='none', edgecolors='grey', label="Solutions")
-# plt.scatter(F_pareto[:, 0], F_pareto[:, 1], s=30, facecolors="#FB7AE1", edgecolors='#FB7AE1', label="Pareto")
-# plt.xlabel('Seal leakage (kg/s)')
-# plt.ylabel('Bearing power loss (W)')
-# plt.legend()
-# plt.savefig("pareto_2factor.png", dpi=600, bbox_inches="tight")
-# plt.show()
+plt.figure(figsize=figsize_SC_one_third_s)
+plt.scatter(F_pop[:, 0], F_pop[:, 1], s=10, alpha=0.5,facecolors='none', edgecolors='grey', label="Solutions")
+plt.scatter(F_pareto[:, 0], F_pareto[:, 1], s=30, facecolors="#FB7AE1", edgecolors='#FB7AE1', label="Pareto")
+plt.xlabel('Seal leakage (kg/s)')
+plt.ylabel('Bearing power loss (W)')
+plt.legend()
+plt.savefig("pareto_2factor.png", dpi=600, bbox_inches="tight")
+plt.show()
 
 
 
 #%%
 # --- Optimization results (Pareto visuals) ---
-# save_optimization_plots('checkpoints/latest.npz', ctx['n_brg'])
+save_optimization_plots('checkpoints/latest.npz', ctx['n_brg'])
 
 
 
