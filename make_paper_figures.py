@@ -1,3 +1,4 @@
+#%%
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,32 +7,49 @@ from import_data import rotor_import
 from loader_brg_seal import BearingNondModel, SealDONModel, SealLeakModel
 from solver_rotordyn import assemble_system_matrix, eig_batch, unbalance_response_batch_cpu_parallel
 from scipy.signal import find_peaks
+from itertools import cycle
+from pymoo.visualization.pcp import PCP
+from pymoo.visualization.radviz import Radviz
+from typing import Optional
 
 # Optional: reuse existing pareto plotting helpers if available
-try:
-    from visualize_pareto import plot_PCP as pareto_plot_PCP
-    from visualize_pareto import plot_RAD as pareto_plot_RAD
-    from visualize_pareto import plot_bearing_id_hist
-except Exception:
-    pareto_plot_PCP = None
-    pareto_plot_RAD = None
-    plot_bearing_id_hist = None
+# try:
+    # from visualize_pareto import plot_PCP as pareto_plot_PCP
+    # from visualize_pareto import plot_RAD as pareto_plot_RAD
+# from visualize_pareto import plot_bearing_id_hist
+# except Exception:
+    # pareto_plot_PCP = None
+    # pareto_plot_RAD = None
+    # plot_bearing_id_hist = None
 
 try:
     from solver_seal import main_seal_solver
 except Exception:
     main_seal_solver = None
 
+cm = 1/2.54  # centimeters in inches
+
+figsize_F = (6.8, 4.2) # single column
+figsize_SC = (6, 3.7) # single column
+figsize_SC_two_third = (4, 3.7) # single column
+figsize_SC_one_third = (2.1, 3.7) # single column
+figsize_SC_two_third_s = (4, 2.4) # single column, short
+figsize_SC_one_third_s = (2.1, 2.4) # single column, short
+figsize_SC_s = (6, 2.8) # single column, short
+figsize_DC = (3.1, 1.94) # double column
+# figsize_DC_b = (3.3, 2.06) # double column, big
+figsize_DC_b = (3.5, 2.18) # double column, big
+figsize_DC_tall = (3.3, 3.3) # double column
 
 def _default_rcparams():
     plt.rcParams.update({
-        "figure.figsize": (6, 4),
-        "font.size": 9,
-        "axes.labelsize": 10,
-        "xtick.labelsize": 9,
-        "ytick.labelsize": 9,
-        "legend.fontsize": 9,
-        "lines.linewidth": 1.2
+        "figure.figsize": figsize_DC,
+        "font.size": 8,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 8,
+        "lines.linewidth": 1
     })
 
 
@@ -41,9 +59,9 @@ def build_rotor_and_models(bs_params):
     rotor_sheet = "RDOPT"
 
     (n_ele, n_node, n_dof, n_add, n_brg, n_seal,
-     rotor_elements, rotor_nodal_props, added_elements, added_props,
-     mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb,
-     brgs, seals, support_dofs) = rotor_import(file_path=rotor_file, sheet_name=rotor_sheet, bs_params=bs_params)
+    rotor_elements, rotor_nodal_props, added_elements, added_props,
+    mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb,
+    brgs, seals, support_dofs) = rotor_import(file_path=rotor_file, sheet_name=rotor_sheet, bs_params=bs_params)
 
     model_brg = BearingNondModel()
     model_seal = SealDONModel()
@@ -150,7 +168,7 @@ def analyze_design(X, ctx, w_vec):
 def plot_campbell(eigvals, w_vec, out_path, title=None, ylim_rpm=(0, 7000)):
     _default_rcparams()
     E = np.array(eigvals)[0]  # [n_w, k]
-    beta = np.abs(E.imag) * 30.0 / np.pi
+    beta = np.abs(E.imag) * 30.0 / np.pi / 60 # in Hz
     rpm = w_vec * 30.0 / np.pi
 
     # pick lowest n modes by average frequency
@@ -160,17 +178,47 @@ def plot_campbell(eigvals, w_vec, out_path, title=None, ylim_rpm=(0, 7000)):
     idx = np.argsort(beta.mean(axis=0))[:n_pick]
 
     fig, ax = plt.subplots()
+    # excitation (1x) line in Hz
+    exc = rpm / 60.0
+
     for k in idx:
-        ax.plot(rpm, beta[:, k], '-')
-    ax.plot(rpm, rpm, 'k-', lw=1.0)
-    ax.set_xlabel('Speed (RPM)')
-    ax.set_ylabel('Modal frequency (RPM)')
+        line, = ax.plot(rpm, beta[:, k], '-')
+
+    for k in idx:
+        cross_rpm = []
+        f = beta[:, k] - exc
+        for i in range(len(f) - 1):
+            fi, fj = f[i], f[i+1]
+            if not np.isfinite(fi) or not np.isfinite(fj):
+                continue
+            if fi == 0:
+                cross_rpm.append(rpm[i])
+            elif fj == 0:
+                cross_rpm.append(rpm[i+1])
+            elif fi * fj < 0:  
+                t = fi / (fi - fj)
+                r_c = rpm[i] + t * (rpm[i+1] - rpm[i])
+                cross_rpm.append(r_c)
+        if cross_rpm:
+            cross_rpm = np.array(cross_rpm, dtype=float)
+            ax.plot(cross_rpm, cross_rpm/60.0, linestyle='None', marker='o',
+                    markersize=6.0, markerfacecolor='none', markeredgecolor='black',
+                    markeredgewidth=1.1)
+
+    # plot 1x line last so it stays visible but under markers
+    ax.plot(rpm, exc, 'k-', lw=1.0)
+    ax.set_xlabel('Rotational speed (RPM)')
+    ax.set_ylabel('Frequency (Hz)')
     if title:
         ax.set_title(title)
-    ax.set_ylim(ylim_rpm)
+    ax.set_ylim([0, ylim_rpm[1]/60])
+    ax.set_xlim([0, rpm.max()])
+    start, end = ax.get_xlim()
+    ax.xaxis.set_ticks(np.arange(start, end+0.1, 1400))
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
+    # fig.savefig(out_path, dpi=600, bbox_inches='tight')
+    fig.savefig(out_path, dpi=600)
 
 
 def compute_logdec(eigvals):
@@ -182,6 +230,11 @@ def compute_logdec(eigvals):
 
 def plot_logdec_lowest(logdec_arr, eigvals, w_vec, out_path, n=4, ylim=(0.0, 2.0)):
     _default_rcparams()
+    import matplotlib as mlp
+    from cycler import cycler
+    default_cycle = mlp.rcParams.get('axes.prop_cycle')    
+    sty_cycle = cycler('linestyle', ['-', '--', ':', '-.']) * cycler('color', default_cycle.by_key().get('color'))
+    
     L = np.array(logdec_arr)  # [n_w, m]
     EV = np.array(eigvals)[0]  # [n_w, k]
     m = min(L.shape[1], EV.shape[1])
@@ -198,19 +251,27 @@ def plot_logdec_lowest(logdec_arr, eigvals, w_vec, out_path, n=4, ylim=(0.0, 2.0
     fig, ax = plt.subplots()
     for i, k in enumerate(sel):
         ax.plot(x_rpm, L[:, k], label=f"Mode {i+1}")
-    ax.axhline(0.1, color='r', lw=1.2)
-    ax.set_xlabel('Speed (RPM)')
+    ax.axhline(0.1, color='r', lw=1.2, linestyle='--')
+    ax.set_xlabel('Rotational speed (RPM)')
     ax.set_ylabel(r'$\delta$')
-    ax.set_ylim(ylim)
-    ax.set_xlim([x_rpm.min(), x_rpm.max()])
+    # ax.set_ylim(ylim)
+    ax.set_xlim([0, x_rpm.max()])
+    start, end = ax.get_xlim()
+    ax.xaxis.set_ticks(np.arange(start, end+0.1, 1400))
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
+    # fig.savefig(out_path, dpi=600, bbox_inches='tight')
+    fig.savefig(out_path, dpi=600)
 
 
-def plot_unbalance_response(amp, w_vec, ctx, out_path, nodes='key', smooth_spline=True):
+def plot_unbalance_response(amp, w_vec, ctx, out_path, nodes='key', smooth_spline=True, figsize=figsize_DC, show_lgd=False):
     _default_rcparams()
+    import matplotlib as mlp
+    from cycler import cycler
+    default_cycle = mlp.rcParams.get('axes.prop_cycle')    
+    sty_cycle = cycler('linestyle', ['-', '--', ':', '-.']) * cycler('color', default_cycle.by_key().get('color'))
+    
     A = np.array(amp)[0]  # [n_w, n_node]
     n_w, n_node = A.shape
     brgs = ctx['brgs']
@@ -239,27 +300,144 @@ def plot_unbalance_response(amp, w_vec, ctx, out_path, nodes='key', smooth_splin
     sel = sel[(sel >= 0) & (sel < n_node)]
     if sel.size == 0:
         sel = np.arange(min(n_node, 6))
+        
+    set_brg = set(bearing_nodes.tolist())
+    set_seal = set(seal_nodes.tolist())
+    set_unb = set(unb_nodes.tolist())
+    
+    def category(n):
+        if n in set_brg:
+            return 'brg'
+        if n in set_seal:
+            return 'seal'
+        if n in set_unb:
+            return 'unb'
+        return 'other'
 
     # optionally spline along speed
     from scipy.interpolate import CubicSpline
     rpm = w_vec * 30.0 / np.pi
-    fig, ax = plt.subplots()
-    for n in sel:
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    seen_labels = set()
+    w_use = w_vec
+    # for n, sty in zip(sel, cycle(sty_cycle)):
+    for iu, (n, sty) in enumerate(zip(sel, cycle(sty_cycle))):
         y = A[:, n]
+        cat = category(n)
+        label = f"{cat.title()} {n}"
+        label = f"{'node'.title()} {n}, {cat.title()} {iu}"
+        label = f"{'node'.title()} {n}"
+        lbl = None if cat in seen_labels else label
+        if lbl is not None:
+            seen_labels.add(label)
         if smooth_spline and n_w >= 3:
             w_use = np.linspace(w_vec.min(), w_vec.max(), max(200, n_w*5))
             cs = CubicSpline(w_vec, y, bc_type='natural')
             y_plot = cs(w_use)
-            ax.plot(w_use * 30.0 / np.pi, y_plot * 1e6, lw=1.6)
+            ax.plot(w_use * 30.0 / np.pi, y_plot * 1e6, lw=1.5, label=lbl, **sty,)
         else:
-            ax.plot(rpm, y * 1e6, lw=1.6)
-    ax.set_xlabel('Rotor speed (RPM)')
+            ax.plot(rpm, y * 1e6, lw=1.5, label=lbl, **sty,)
+    
+    ax.set_xlabel('Rotational speed (RPM)')
     ax.set_ylabel(r'Unbalanced response $(\mu m)$')
-    ax.set_xlim([rpm.min(), rpm.max()])
+    _, ylim_max = ax.get_ylim()
+    ax.set_ylim(0, ylim_max)
+    ax.set_xlim(0, rpm.max())
+    start, end = ax.get_xlim()
+    ax.xaxis.set_ticks(np.arange(start, end+0.1, 1400))
     ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
+    if show_lgd:
+        ax.legend()
+        # long legend
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', 
+                borderaxespad=0., ncol=2,
+                handlelength=1.2)
 
+    fig.tight_layout()
+    
+    fig.savefig(out_path, dpi=600, bbox_inches='tight')
+
+
+def pareto_plot_PCP(F, names, idx: Optional[np.ndarray] = None, out_path="pareto_PCP.png", figsize=figsize_DC):
+    _default_rcparams()
+    # import matplotlib.pyplot as plt
+
+    plot = PCP(
+        # title=("Pareto Front (Objectives)", {'pad': 30}),
+        labels=names,
+        figsize=figsize
+        )
+    plot.set_axis_style(color="grey", alpha=0.5)
+    plot.add(F, color="grey", alpha=0.3)
+
+    # Normalize idx into indices, allow None/empty
+    indices = np.array([], dtype=int)
+    if idx is not None:
+        if isinstance(idx, (int, np.integer)):
+            indices = np.array([int(idx)])
+        else:
+            idx_arr = np.asarray(idx)
+            if idx_arr.dtype == bool:
+                indices = np.flatnonzero(idx_arr)
+            elif idx_arr.size > 0:
+                indices = idx_arr.astype(int).ravel()
+
+    for i, idc in enumerate(indices):
+
+        plot.add(np.atleast_2d(F[idc]), linewidth=3, linestyle='-')
+    plot.save(out_path, dpi=600, bbox_inches="tight")
+
+    plot.show()
+    return plot
+
+def pareto_plot_RAD(F, names, idx: Optional[np.ndarray] = None, figsize=figsize_DC,scale=True):
+    if scale:
+        from sklearn.preprocessing import MinMaxScaler
+        F_scaled = F
+        for of in range(F.shape[1]):
+            scaler = MinMaxScaler()
+            scaler.fit(F_scaled[:,of].reshape(-1,1))
+            F_scaled[:,of] = scaler.transform(F_scaled[:,of].reshape(-1,1)).squeeze()
+        F = F_scaled
+    
+    plot = Radviz(
+        # title="Optimization",
+        # legend=(True, {'loc': "upper left", 'bbox_to_anchor': (-0.1, 1.08, 0, 0)}),
+        labels=names,
+        endpoint_style={"s": 40, "color": "green"},
+        figsize=figsize
+        )
+    plot.set_axis_style(color="black", alpha=1.0)
+    plot.add(F, color="grey", s=10)
+    
+    # Normalize idx into indices, allow None/empty
+    indices = np.array([], dtype=int)
+    if idx is not None:
+        if isinstance(idx, (int, np.integer)):
+            indices = np.array([int(idx)])
+        else:
+            idx_arr = np.asarray(idx)
+            if idx_arr.dtype == bool:
+                indices = np.flatnonzero(idx_arr)
+            elif idx_arr.size > 0:
+                indices = idx_arr.astype(int).ravel()
+
+    first_colors = ["red", "blue", "green"]
+    default_cycle = plt.rcParams.get('axes.prop_cycle')
+    cycle_colors = (default_cycle.by_key().get('color',
+                    ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9'])) if default_cycle else ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
+
+    for i, idc in enumerate(indices):
+        # if i < 3:
+        #     color = first_colors[i]
+        # else:
+        #     color = cycle_colors[(i - 3) % len(cycle_colors)]
+        color = cycle_colors[(i - 3) % len(cycle_colors)]
+        plot.add(np.atleast_2d(F[idc]), linewidth=2)
+    plot.save("pareto_RAD.png", dpi=600, bbox_inches="tight")
+    plot.show()
+    return plot
 
 def save_optimization_plots(checkpoint_path, n_brg):
     if not os.path.exists(checkpoint_path):
@@ -269,26 +447,40 @@ def save_optimization_plots(checkpoint_path, n_brg):
     X_pop, F_pop = d['pop_X'], d['pop_F']
     X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
-    obj_names = [r'$\dot{\mathrm{m}}_{total}$', r'$\mathrm{PL}_{brg}$', r'$\mathrm{AF}_{\max}$', r'$-\delta_{\min}$', r'$\mathrm{Ampl.}_{brg}$', r'$\mathrm{Ampl.}_{seal}$']
-
+    # obj_names = [r'$\dot{\mathrm{m}}_{total}$', r'$\mathrm{PL}_{brg}$', r'$\mathrm{AF}_{\max}$', r'$-\delta_{\min}$', r'$\mathrm{Ampl.}_{brg}$', r'$\mathrm{Ampl.}_{seal}$']
+    obj_names = [r'$\dot{\mathrm{m}}_{total}$', r'$\mathrm{PL}_{brg}$', r'$\mathrm{AF}_{\max}$', r'$\delta_{\min}$', r'$\mathrm{Ampl.}_{brg}$', r'$\mathrm{Ampl.}_{seal}$']
+    pareto_signs = np.array([1, 1, 1, -1, 1, 1])
+    F_pareto_corrected = F_pareto * pareto_signs
     # Select a few reference pareto points by first objective
     sel = np.argsort(F_pareto[:, 0])
-    sel = sel[[0, 1, min(len(sel)-1, len(sel)-1)]] if len(sel) >= 3 else sel
+    # sel = sel[[0, 1, min(len(sel)-1, len(sel)-1)]] if len(sel) >= 3 else sel
+    sel = sel[[0, -1]]
 
-    if pareto_plot_PCP is not None:
-        pareto_plot_PCP(F=F_pareto, names=obj_names, idx=sel)
-    else:
-        print("[warn] pareto PCP helper not available; skipping PCP figure.")
+    # pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel,
+    #                 figsize=figsize_SC_two_third_s)
+    
+    # if pareto_plot_PCP is not None:
+    #     # pareto_plot_PCP(F=F_pareto_corrected[:,:2], names=obj_names[:2],
+    #     #                 idx=sel,
+    #     #                 out_path="pareto_2factor")
+    # else:
+    #     print("[warn] pareto PCP helper not available; skipping PCP figure.")
+        
 
-    if pareto_plot_RAD is not None:
-        pareto_plot_RAD(F=F_pareto, names=obj_names, idx=sel)
-    else:
-        print("[warn] pareto Radviz helper not available; skipping Radviz figure.")
+    pareto_plot_RAD(F=F_pareto_corrected, 
+                    names=obj_names, 
+                    idx=sel,
+                    figsize=figsize_DC_b)
+    # if pareto_plot_RAD is not None:
+    #     pareto_plot_RAD(F=F_pareto_corrected, names=obj_names, idx=sel)
+    # else:
+    #     print("[warn] pareto Radviz helper not available; skipping Radviz figure.")
 
-    if plot_bearing_id_hist is not None:
-        plot_bearing_id_hist(X_pop, X_pareto, n_brg)
-    else:
-        print("[warn] bearing histogram helper not available; skipping bearing history figure.")
+    # plot_bearing_id_hist(X_pop, X_pareto, n_brg)
+    # if plot_bearing_id_hist is not None:
+        # plot_bearing_id_hist(X_pop, X_pareto, n_brg)
+    # else:
+    #     print("[warn] bearing histogram helper not available; skipping bearing history figure.")
 
 
 def save_nn_validation(w_vec, out_dir='.'):
@@ -332,7 +524,7 @@ def save_nn_validation(w_vec, out_dir='.'):
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, 'nn_leak_validation.png'), dpi=300, bbox_inches='tight')
+    fig.savefig(os.path.join(out_dir, 'nn_leak_validation.png'), dpi=600, bbox_inches='tight')
 
     # 2) RDC curves: each channel C,c,K,k vs speed
     labels = ['C', 'c', 'K', 'k']
@@ -348,81 +540,196 @@ def save_nn_validation(w_vec, out_dir='.'):
         if i == 0:
             axs[i].legend(loc='best')
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, 'nn_rdc_validation.png'), dpi=300, bbox_inches='tight')
+    fig.savefig(os.path.join(out_dir, 'nn_rdc_validation.png'), dpi=600, bbox_inches='tight')
 
 
-def run():
-    # --- global settings ---
-    w_range = np.array([500, 7000]) * np.pi / 30
-    n_w = 14
-    w_vec = np.linspace(w_range[0], w_range[1], n_w)
-    w_oper = 3500 * np.pi / 30
+# def run():
+#     # --- global settings ---
+#     w_range = np.array([500, 7000]) * np.pi / 30
+#     n_w = 14
+#     w_vec = np.linspace(w_range[0], w_range[1], n_w)
+#     w_oper = 3500 * np.pi / 30
 
-    bs_params = {
-        'mu_brg': 0.01,
-        'mu_seal': 1.4e-3,
-        'rho_seal': 850,
-    }
+#     bs_params = {
+#         'mu_brg': 0.01,
+#         'mu_seal': 1.4e-3,
+#         'rho_seal': 850,
+#     }
 
-    # --- load rotor + models ---
-    ctx = build_rotor_and_models(bs_params)
+#     # --- load rotor + models ---
+#     ctx = build_rotor_and_models(bs_params)
 
-    # --- Initial/reference design (programmatic, matches n_brg/n_seal) ---
-    def build_initial_X(n_brg, n_seal):
-        # Bearings: [id, clearance_ratio]
-        X_brg = np.tile([2, 15], (n_brg, 1))
-        # Seals: [h_in(um), h_out(um), psr*10]
-        # X_seal = np.tile([300, 300, 0], (n_seal, 1))
+#     # --- Initial/reference design (programmatic, matches n_brg/n_seal) ---
+#     def build_initial_X(n_brg, n_seal):
+#         # Bearings: [id, clearance_ratio]
+#         X_brg = np.tile([2, 15], (n_brg, 1))
+#         # Seals: [h_in(um), h_out(um), psr*10]
+#         # X_seal = np.tile([300, 300, 0], (n_seal, 1))
         
-        X_seal = np.concatenate([np.tile([285, 285, 6.5], 2),
-                                np.tile([300, 300, 0, 300, 300, 7.5], 6),
-                                [285, 285, 6.5]]
-                            )
+#         X_seal = np.concatenate([np.tile([285, 285, 6.5], 2),
+#                                 np.tile([300, 300, 0, 300, 300, 7.5], 6),
+#                                 [285, 285, 6.5]]
+#                             )
 
-        return np.concatenate([X_brg.ravel(), X_seal.ravel()], axis=0)[None, :]
+#         return np.concatenate([X_brg.ravel(), X_seal.ravel()], axis=0)[None, :]
 
-    X_init = build_initial_X(ctx['n_brg'], ctx['n_seal']).astype(float)
+#     X_init = build_initial_X(ctx['n_brg'], ctx['n_seal']).astype(float)
 
-    eig_init, amp_init = analyze_design(X_init, ctx, w_vec)
-    L_init = compute_logdec(eig_init)
+#     eig_init, amp_init = analyze_design(X_init, ctx, w_vec)
+#     L_init = compute_logdec(eig_init)
 
-    plot_campbell(eig_init, w_vec, out_path='initial_campbell.png', title='Campbell (initial)')
-    plot_logdec_lowest(L_init, eig_init, w_vec, out_path='initial_logdec.png', n=4)
-    plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key')
+#     plot_campbell(eig_init, w_vec, out_path='initial_campbell.png')
+#     plot_logdec_lowest(L_init, eig_init, w_vec, out_path='initial_logdec.png', n=4)
+#     plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key')
 
-    # --- Optimization results (Pareto visuals) ---
-    save_optimization_plots('checkpoints/latest.npz', ctx['n_brg'])
+#     # --- Optimization results (Pareto visuals) ---
+#     save_optimization_plots('checkpoints/latest.npz', ctx['n_brg'])
 
-    # --- Optimized design: pick one pareto solution ---
-    try:
-        d = np.load('checkpoints/latest.npz')
-        X_pareto, F_pareto = d['opt_X'], d['opt_F']
-        # choose by minimum total leakage as an example
-        idx = int(np.argmin(F_pareto[:, 0])) if len(F_pareto) else 0
-        X_opt = X_pareto[idx:idx+1, :]
-    except Exception:
-        # fallback to initial if checkpoints not present
-        X_opt = X_init.copy()
+#     # --- Optimized design: pick one pareto solution ---
+#     try:
+#         d = np.load('checkpoints/latest.npz')
+#         X_pareto, F_pareto = d['opt_X'], d['opt_F']
+#         # choose by minimum total leakage as an example
+#         idx = int(np.argmin(F_pareto[:, 0])) if len(F_pareto) else 0
+#         X_opt = X_pareto[idx:idx+1, :]
+#     except Exception:
+#         # fallback to initial if checkpoints not present
+#         X_opt = X_init.copy()
 
-    eig_opt, amp_opt = analyze_design(X_opt, ctx, w_vec)
-    L_opt = compute_logdec(eig_opt)
+#     eig_opt, amp_opt = analyze_design(X_opt, ctx, w_vec)
+#     L_opt = compute_logdec(eig_opt)
 
-    plot_campbell(eig_opt, w_vec, out_path='optimized_campbell.png', title='Campbell (optimized)')
-    plot_logdec_lowest(L_opt, eig_opt, w_vec, out_path='optimized_logdec.png', n=4)
-    plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance.png', nodes='key')
+#     plot_campbell(eig_opt, w_vec, out_path='optimized_campbell.png')
+#     plot_logdec_lowest(L_opt, eig_opt, w_vec, out_path='optimized_logdec.png', n=4)
+#     plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance.png', nodes='key')
 
-    # --- Neural network model validation (leakage + RDC)
-    save_nn_validation(w_vec, out_dir='.')
+#     # --- Neural network model validation (leakage + RDC)
+#     save_nn_validation(w_vec, out_dir='.')
 
-    print('Saved figures:')
-    for f in [
-        'initial_campbell.png', 'initial_logdec.png', 'initial_unbalance.png',
-        'pareto_PCP.png', 'pareto_RAD.png', 'bearing_hist.png',
-        'optimized_campbell.png', 'optimized_logdec.png', 'optimized_unbalance.png',
-        'nn_leak_validation.png', 'nn_rdc_validation.png']:
-        if os.path.exists(f):
-            print(' -', f)
+#     print('Saved figures:')
+#     for f in [
+#         'initial_campbell.png', 'initial_logdec.png', 'initial_unbalance.png',
+#         'pareto_PCP.png', 'pareto_RAD.png', 'bearing_hist.png',
+#         'optimized_campbell.png', 'optimized_logdec.png', 'optimized_unbalance.png',
+#         'nn_leak_validation.png', 'nn_rdc_validation.png']:
+#         if os.path.exists(f):
+#             print(' -', f)
+
+#%%
+
+# --- global settings ---
+w_range = np.array([500, 7000]) * np.pi / 30
+n_w = 11
+w_vec = np.linspace(w_range[0], w_range[1], n_w)
+w_oper = 3500 * np.pi / 30
+
+bs_params = {
+    'mu_brg': 0.025,
+    'mu_seal': 1.4e-3,
+    'rho_seal': 850,
+}
+
+# --- load rotor + models ---
+ctx = build_rotor_and_models(bs_params)
+
+# --- Initial/reference design (programmatic, matches n_brg/n_seal) ---
+def build_initial_X(n_brg, n_seal):
+    # Bearings: [id, clearance_ratio]
+    X_brg = np.tile([2, 15], (n_brg, 1))
+    # Seals: [h_in(um), h_out(um), psr*10]
+    # X_seal = np.tile([300, 300, 0], (n_seal, 1))
+    
+    X_seal = np.concatenate([np.tile([285, 285, 6.5], 2),
+                            np.tile([300, 300, 0, 300, 300, 7.5], 6),
+                            [285, 285, 6.5]]
+                        )
+
+    return np.concatenate([X_brg.ravel(), X_seal.ravel()], axis=0)[None, :]
+
+X_init = build_initial_X(ctx['n_brg'], ctx['n_seal']).astype(float)
+
+eig_init, amp_init = analyze_design(X_init, ctx, w_vec)
+L_init = compute_logdec(eig_init)
 
 
-if __name__ == '__main__':
-    run()
+# --- Optimized design: pick one pareto solution ---
+try:
+    d = np.load('checkpoints/latest.npz')
+    X_pop, F_pop = d['pop_X'], d['pop_F']
+    X_pareto, F_pareto = d['opt_X'], d['opt_F']
+    # choose by minimum total leakage as an example
+    idx = int(np.argmin(F_pareto[:, 0])) if len(F_pareto) else 0
+    X_opt = X_pareto[idx:idx+1, :]
+except Exception:
+    # fallback to initial if checkpoints not present
+    X_opt = X_init.copy()
+
+
+#%%
+# plot_campbell(eig_init, w_vec, out_path='initial_campbell.png')
+# plot_logdec_lowest(L_init, eig_init, w_vec, out_path='initial_logdec.png', n=4)
+# # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance_brg.png', nodes='brg')
+# # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance_seal.png', nodes='seal', figsize=figsize_DC_tall)
+# # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key', figsize=figsize_SC_s)
+# plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key', figsize=(6, 2.35))
+
+
+
+
+
+
+
+#%%
+# plt.figure(figsize=figsize_SC_one_third_s)
+# plt.scatter(F_pop[:, 0], F_pop[:, 1], s=10, alpha=0.5,facecolors='none', edgecolors='grey', label="Solutions")
+# plt.scatter(F_pareto[:, 0], F_pareto[:, 1], s=30, facecolors="#FB7AE1", edgecolors='#FB7AE1', label="Pareto")
+# plt.xlabel('Seal leakage (kg/s)')
+# plt.ylabel('Bearing power loss (W)')
+# plt.legend()
+# plt.savefig("pareto_2factor.png", dpi=600, bbox_inches="tight")
+# plt.show()
+
+
+
+#%%
+# --- Optimization results (Pareto visuals) ---
+# save_optimization_plots('checkpoints/latest.npz', ctx['n_brg'])
+
+
+
+
+
+
+
+# #%%
+
+# eig_opt, amp_opt = analyze_design(X_opt, ctx, w_vec)
+# L_opt = compute_logdec(eig_opt)
+
+# plot_campbell(eig_opt, w_vec, out_path='optimized_campbell_0.png')
+# plot_logdec_lowest(L_opt, eig_opt, w_vec, out_path='optimized_logdec_0.png', n=4)
+# # plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_0.png', nodes='key',figsize=figsize_SC_s)
+# plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_0.png', nodes='key')
+
+
+# plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_brg.png', nodes='brg')
+# plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_seal.png', nodes='seal')
+
+
+#%%
+
+# --- Neural network model validation (leakage + RDC)
+# save_nn_validation(w_vec, out_dir='.')
+
+
+#%%
+# print('Saved figures:')
+# for f in [
+#     'initial_campbell.png', 'initial_logdec.png', 'initial_unbalance.png',
+#     'pareto_PCP.png', 'pareto_RAD.png', 'bearing_hist.png',
+#     'optimized_campbell.png', 'optimized_logdec.png', 'optimized_unbalance.png',
+#     'nn_leak_validation.png', 'nn_rdc_validation.png']:
+#     if os.path.exists(f):
+#         print(' -', f)
+
+# %%

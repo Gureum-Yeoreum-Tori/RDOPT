@@ -375,17 +375,25 @@ for seal_idx, mat_file in enumerate(mat_files):
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'best_val_loss': best_val_loss,
-                'epoch': epoch
+                'epoch': epoch,
+                # dataset split indices
+                'train_idx': train_idx.tolist(),
+                'val_idx': val_idx.tolist(),
+                'test_idx': test_idx.tolist(),
             }, ckpt_best_path)
 
         # Save last (full state for resume)
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'best_val_loss': best_val_loss,
-            'epoch': epoch
-        }, ckpt_last_path)
+        # torch.save({
+        #     'model_state_dict': model.state_dict(),
+        #     'optimizer_state_dict': optimizer.state_dict(),
+        #     'scheduler_state_dict': scheduler.state_dict(),
+        #     'best_val_loss': best_val_loss,
+        #     'epoch': epoch,
+        #     # dataset split indices
+        #     'train_idx': train_idx.tolist(),
+        #     'val_idx': val_idx.tolist(),
+        #     'test_idx': test_idx.tolist(),
+        # }, ckpt_last_path)
 
         
     
@@ -404,6 +412,12 @@ for seal_idx, mat_file in enumerate(mat_files):
         "additional": {
             "w_min": w_min,
             "w_max": w_max,
+        },
+        # dataset split indices for reproducibility
+        "splits": {
+            "train_idx": train_idx.tolist(),
+            "val_idx": val_idx.tolist(),
+            "test_idx": test_idx.tolist(),
         },
         # 전처리 스케일러도 같이 저장하면 편함
         "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,

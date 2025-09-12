@@ -3,6 +3,7 @@
 /checkpoints
 /result
 ng*
+*.png
 
 # DS_Store
 .DS_Store

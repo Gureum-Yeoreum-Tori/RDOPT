@@ -24,7 +24,7 @@ d = np.load('checkpoints/latest.npz')
 X_pop, F_pop = d['pop_X'], d['pop_F']
 X_pareto, F_pareto = d['opt_X'], d['opt_F']
 
-def plot_PCP(F, names, idx: Optional[np.ndarray] = None):
+def plot_PCP(F, names, idx: Optional[np.ndarray] = None, out_path="pareto_PCP.png", figsize = (6,4)):
     import matplotlib.pyplot as plt
     # plt.rcParams.update({
     #     # "figure.figsize": (6, 4),   # 단일 column에 맞춤
@@ -39,7 +39,7 @@ def plot_PCP(F, names, idx: Optional[np.ndarray] = None):
     plot = PCP(
         # title=("Pareto Front (Objectives)", {'pad': 30}),
         labels=names,
-        figsize=(6, 4)
+        figsize=figsize
         )
     plot.set_axis_style(color="grey", alpha=0.5)
     plot.add(F, color="grey", alpha=0.3)
@@ -67,18 +67,18 @@ def plot_PCP(F, names, idx: Optional[np.ndarray] = None):
         else:
             color = cycle_colors[(i - 3) % len(cycle_colors)]
         plot.add(np.atleast_2d(F[idc]), linewidth=5, color=color, linestyle='-')
-    plot.save("pareto_PCP.png", dpi=300, bbox_inches="tight")
+    plot.save(out_path, dpi=600, bbox_inches="tight")
 
     plot.show()
     return plot
 
-def plot_RAD(F, names, idx: Optional[np.ndarray] = None):
+def plot_RAD(F, names, idx: Optional[np.ndarray] = None, figsize =(6, 4)):
     plot = Radviz(
         # title="Optimization",
         # legend=(True, {'loc': "upper left", 'bbox_to_anchor': (-0.1, 1.08, 0, 0)}),
         labels=names,
         endpoint_style={"s": 70, "color": "green"},
-        figsize=(6, 4)
+        figsize=figsize
         )
     plot.set_axis_style(color="black", alpha=1.0)
     plot.add(F, color="grey", s=20)
@@ -106,7 +106,7 @@ def plot_RAD(F, names, idx: Optional[np.ndarray] = None):
         else:
             color = cycle_colors[(i - 3) % len(cycle_colors)]
         plot.add(np.atleast_2d(F[idc]), linewidth=3, color=color)
-    plot.save("pareto_RAD.png", dpi=300, bbox_inches="tight")
+    plot.save("pareto_RAD.png", dpi=600, bbox_inches="tight")
     plot.show()
     return plot
 
@@ -162,17 +162,89 @@ def summarize_generations(dir='checkpoints'):
         plt.title('Best per objective'); plt.legend(); plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
     return nds_cnt, best_vals
 
+
 def plot_bearing_id_hist(X_pop, X_par, n_brg):
     import matplotlib as mpl
     plt.rc('axes', prop_cycle=mpl.rcParamsDefault['axes.prop_cycle'])
     ids_pop = X_pop[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
     ids_par = X_par[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
-    fig, ax = plt.subplots(figsize=(7,3))
-    ax.hist(ids_pop, bins=np.arange(1,55)-0.5, alpha=0.4, label='pop')
-    ax.hist(ids_par, bins=np.arange(1,55)-0.5, alpha=0.8, label='pareto')
+    fig, ax = plt.subplots(figsize=(6,2.8))
+    ax.hist(ids_pop, bins=np.arange(1,55)+1, alpha=0.4, rwidth=0.8, align='mid',label='pop')
+    ax.hist(ids_par, bins=np.arange(1,55)+1, alpha=0.8, rwidth=0.8, align='mid',label='pareto')
+    
+    # boundaries = [4, 5, 9, 15, 19, 23, 39, 55]   # 각 타입 끝 ID
+    # labels = ["Axial grooved", "Pressure dam", "Partial arc", "2-Lobe", "3-Lobe", "4-Lobe", "4-Pad tilting", "5-Pad tilting"]
+    boundaries = [1, 4, 5, 9]   # 각 타입 끝 ID
+    labels = ["", "Axial grooved", "Pressure dam", "Partial arc"]
+    for b in boundaries:
+        # ax.axvline(b + 0.5, color='k', linestyle='--', lw=1)
+        ax.axvline(b, color='k', linestyle='--', lw=1)
+
+    # 타입 레이블 표시
+    for i, b in enumerate(boundaries):
+        if i == 0:
+            x0 = 1
+        else:
+            x0 = boundaries[i-1]+1
+        x1 = b
+        xpos = (x0 + x1) / 2
+        
+        ylevels = [1.16, 1.02, 1.09]  # ylim 대비 비율
+        ypos = ax.get_ylim()[1] * ylevels[i % 3]
+        
+        ax.text(xpos-0.5, ypos, labels[i],
+                ha='center', va='bottom', fontsize=8, rotation=0)
+        
+        
+        
+    boundaries = [15, 19, 23, 39, 55]   # 각 타입 끝 ID
+    labels = ["2-Lobe", "3-Lobe", "4-Lobe", "4-Pad tilting", "5-Pad tilting"]
+    for b in boundaries[:-1]:
+        # ax.axvline(b + 0.5, color='k', linestyle='--', lw=1)
+        ax.axvline(b, color='k', linestyle='--', lw=1)
+
+    # 타입 레이블 표시
+    for i, b in enumerate(boundaries):
+        if i == 0:
+            x0 = 9
+        else:
+            x0 = boundaries[i-1]+1
+        x1 = b
+        xpos = (x0 + x1) / 2
+        
+        ylevels = 1.09  # ylim 대비 비율
+        ypos = ax.get_ylim()[1] * ylevels
+        
+        ax.text(xpos-0.5, ypos, labels[i],
+                ha='center', va='bottom', fontsize=8, rotation=0)
+        
+    boundaries = [31, 39, 47, 55]   # 각 타입 끝 ID
+    labels = ["LBP","LOP","LBP","LOP"]
+    # 타입 레이블 표시
+    for i, b in enumerate(boundaries):
+        if i%2 == 0:
+            ax.axvline(b, color='b', linestyle='--', lw=1)
+            
+        if i == 0:
+            x0 = 23
+        else:
+            x0 = boundaries[i-1]+1
+        x1 = b
+        xpos = (x0 + x1) / 2
+        
+        ylevels = 1.02  # ylim 대비 비율
+        ypos = ax.get_ylim()[1] * ylevels
+        
+        ax.text(xpos-0.5, ypos, labels[i],
+                ha='center', va='bottom', fontsize=8, rotation=0)
+
+    boundaries = [4, 5, 9, 15, 19, 23, 31, 39, 47, 55]
+    ax.set_xlim(1, 55)
+    ax.set_xticks(boundaries)
     plt.xlabel('Bearing ID'); plt.ylabel('Count'); plt.legend(); plt.tight_layout(); 
-    fig.savefig("bearing_hist.png", dpi=300, bbox_inches="tight")
+    fig.savefig("bearing_hist.png", dpi=600, bbox_inches="tight")
     plt.show()
+
 
 #%%
 sorted_idx = np.argsort(F_pareto[:,0])
@@ -337,7 +409,7 @@ def plot_harmonic(w, amp, nodes='key', fontsize=None, smooth=None):
 
     # plt.rc('axes', prop_cycle=(cycler('color', ['r', 'g', 'b', 'y', 'c', 'k']) *
                             # cycler('linestyle', ['-', '--', ':', '-.'])))
-    sty_cycle = cycler('color', ['r', 'g', 'b', 'y', 'c', 'k']) * cycler('linestyle', ['-', '--', ':', '-.'])
+    sty_cycle = cycler('linestyle', ['-', '--', ':', '-.']) * cycler('color', ['r', 'g', 'b', 'y', 'c', 'k'])
 
     # Optional smoothing
     A_plot = A
@@ -389,7 +461,7 @@ def plot_harmonic(w, amp, nodes='key', fontsize=None, smooth=None):
     if len(seen_labels):
         ax.legend()
     fig.tight_layout()
-    fig.savefig("unb_resp.png", dpi=300, bbox_inches="tight")
+    fig.savefig("unb_resp.png", dpi=600, bbox_inches="tight")
     # plt.show()
 
 def plot_logdec_lowest(logdec_arr, eigvals_arr, w, n=4, pop_idx=0, fontsize=None):
@@ -458,7 +530,7 @@ def plot_logdec_lowest(logdec_arr, eigvals_arr, w, n=4, pop_idx=0, fontsize=None
     ax.set_xlim([0, 7000])
     ax.legend()
     fig.tight_layout()
-    fig.savefig("log_dec.png", dpi=300, bbox_inches="tight")
+    fig.savefig("log_dec.png", dpi=600, bbox_inches="tight")
 #%%
 
 for i, pi in enumerate(idx):

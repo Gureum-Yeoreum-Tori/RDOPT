@@ -10,14 +10,15 @@ from torch.utils.data import TensorDataset, DataLoader, random_split
 from sklearn.preprocessing import StandardScaler
 from torch.nn.utils import clip_grad_norm_
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from loader_brg_seal import SealDONModel
+from loader_brg_seal import SealDONModel, SealLeakModel
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 1. Load dataset.mat files
 data_dir = 'dataset/data/tapered_seal'
 mat_files = ('20250908_T_182846','20250911_T_091324','20250908_T_183632','20250908_T_203220',)
-model_seal = SealDONModel(device=device)
+m_rdc = SealDONModel(device=device)
+m_leak = SealLeakModel(device=device)
 
 for seal_idx, mat_file in enumerate(mat_files):
 # for mat_file in mat_files:
@@ -59,7 +60,7 @@ for seal_idx, mat_file in enumerate(mat_files):
     X = input_.transpose()
     pop = X.shape[0]
     n_w = w.shape[0]
-    rdc_flat  = model_seal.predict(seal_idx+1, X, w).reshape(pop, 1, 4, n_w).squeeze()
+    rdc_flat  = m_rdc.predict(seal_idx+1, X, w).reshape(pop, 1, 4, n_w).squeeze()
     rdc_true = rdc.transpose([2,0,1])
 
     rdc_flat_ = np.ravel(rdc_flat)

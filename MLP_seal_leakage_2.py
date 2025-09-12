@@ -203,7 +203,12 @@ for mat_file in mat_files:
                 "epoch": epoch,
                 "p_drop": p_drop,
                 "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
-                "scaler_y_mean": scaler_y.mean_, "scaler_y_std": scaler_y.scale_
+                "scaler_y_mean": scaler_y.mean_, "scaler_y_std": scaler_y.scale_,
+                
+                # dataset split indices
+                'train_idx': train_idx.tolist(),
+                'val_idx': val_idx.tolist(),
+                'test_idx': test_idx.tolist(),
             }, "net/mlp_leak_best.pth")
 
         scheduler.step()
@@ -215,6 +220,11 @@ for mat_file in mat_files:
             "hidden_channels": hidden_channels,
             "n_layers": n_layers,
             "p_drop": p_drop,
+        },
+        "splits": {
+            "train_idx": train_idx.tolist(),
+            "val_idx": val_idx.tolist(),
+            "test_idx": test_idx.tolist(),
         },
         # 전처리 스케일러도 같이 저장하면 편함
         "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
