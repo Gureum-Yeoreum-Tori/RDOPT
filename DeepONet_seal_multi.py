@@ -56,7 +56,7 @@ mat_files = ('20250908_T_182846','20250911_T_091324','20250908_T_183632','202509
 # weight_decay=1e-5
 
 # 파라미터 설정
-batch_size = 2**8
+batch_size = 2**9
 # criterion = nn.HuberLoss()
 criterion = nn.MSELoss()
 epochs = 5000
@@ -189,6 +189,8 @@ for seal_idx, mat_file in enumerate(mat_files):
     model_save_path = os.path.join(base_dir, 'deeponet_seal_best_multihead_'+mat_file+'.pth')
     network_path = os.path.join(base_dir, 'deeponet_multihead_'+mat_file+'.pth')
     network_path_ts = os.path.join(base_dir, 'deeponet_multihead_'+mat_file+'.pt')
+    loss_hist_path_png = os.path.join('deeponet_multihead_'+mat_file+'.png')
+    loss_hist_path_eps = os.path.join('deeponet_multihead_'+mat_file+'.eps')
 
     # 데이터 로딩 및 전처리
     with h5py.File(mat_path, 'r') as mat:
@@ -335,7 +337,7 @@ for seal_idx, mat_file in enumerate(mat_files):
     #     start_epoch = int(ckpt_last.get('epoch', -1)) + 1
     #     best_val_loss = float(ckpt_last.get('best_val_loss', float('inf')))
     #     print(f"[Resume] Loaded checkpoint at epoch {start_epoch} (best_val={best_val_loss:.6f})")
-
+    train_losses, val_losses = [], []
     for epoch in range(start_epoch, epochs):
         model.train(); train_loss = 0.0
         n_train = 0
@@ -353,6 +355,7 @@ for seal_idx, mat_file in enumerate(mat_files):
             train_loss += loss.item() * params.size(0)
             n_train += params.size(0)
         train_loss /= n_train
+        train_losses.append(train_loss)
         # scheduler.step()
         
         model.eval(); val_loss = 0.0
@@ -365,6 +368,7 @@ for seal_idx, mat_file in enumerate(mat_files):
                 val_loss += criterion(outputs, functions).item() * params.size(0)
                 n_val    += params.size(0)
         val_loss /= n_val
+        val_losses.append(val_loss)
 
         if (epoch+1) % 100 == 0 or epoch == start_epoch:
             print(f'Epoch {epoch+1}/{epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')
@@ -380,6 +384,8 @@ for seal_idx, mat_file in enumerate(mat_files):
                 'train_idx': train_idx.tolist(),
                 'val_idx': val_idx.tolist(),
                 'test_idx': test_idx.tolist(),
+                'loss_train': train_losses,
+                'loss_val': val_losses,
             }, ckpt_best_path)
 
         # Save last (full state for resume)
@@ -419,6 +425,10 @@ for seal_idx, mat_file in enumerate(mat_files):
             "val_idx": val_idx.tolist(),
             "test_idx": test_idx.tolist(),
         },
+        "train_history": {  
+            'loss_train': train_losses,
+            'loss_val': val_losses,
+        },
         # 전처리 스케일러도 같이 저장하면 편함
         "scaler_X_mean": scaler_X.mean_, "scaler_X_std": scaler_X.scale_,
         "scalers_y_mean": [s.mean_.ravel() for s in scalers_y],
@@ -426,7 +436,19 @@ for seal_idx, mat_file in enumerate(mat_files):
     }
     torch.save(ckpt, network_path)
     
+    plt.figure(figsize=(6,4))
+    plt.plot(train_losses, label="Train loss")
+    plt.plot(val_losses, label="Validation loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.tight_layout()
+    plt.yscale('log', base=10)
+    plt.savefig(loss_hist_path_png,dpi=600,bbox_inches="tight")
+    plt.savefig(loss_hist_path_eps,bbox_inches="tight")
+
     ## save torch script
+    plt.show()
     import copy
     model_cpu = copy.deepcopy(model).eval().to("cpu")
 
