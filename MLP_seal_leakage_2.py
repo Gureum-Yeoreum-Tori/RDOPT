@@ -34,9 +34,9 @@ data_dir = 'dataset/data/tapered_seal'
 mat_files = ('20250908_T_182846','20250911_T_091324','20250908_T_183632','20250908_T_203220',)
 # 파라미터 설정
 # 파라미터 설정
-batch_size = 2**9
+batch_size = 2**8
 criterion = nn.MSELoss()
-epochs = 2500
+epochs = 3000
 hidden_channels = 2**6
 n_layers = 4
 p_drop=0.0

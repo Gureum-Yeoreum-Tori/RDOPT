@@ -56,13 +56,13 @@ mat_files = ('20250908_T_182846','20250911_T_091324','20250908_T_183632','202509
 # weight_decay=1e-5
 
 # 파라미터 설정
-batch_size = 2**9
-criterion = nn.HuberLoss()
+batch_size = 2**8
+# criterion = nn.HuberLoss()
 criterion = nn.MSELoss()
 epochs = 5000
-param_embedding_dim = 2**6
-hidden_channels = 2**6
-n_layers = 6
+# param_embedding_dim = 2**6
+# hidden_channels = 2**6
+# n_layers = 6
 param_embedding_dim = 2**6
 hidden_channels = 2**6
 n_layers = 8
