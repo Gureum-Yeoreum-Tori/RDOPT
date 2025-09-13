@@ -217,8 +217,8 @@ def plot_campbell(eigvals, w_vec, out_path, title=None, ylim_rpm=(0, 7000)):
     ax.xaxis.set_ticks(np.arange(start, end+0.1, 1400))
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    # fig.savefig(out_path, dpi=600, bbox_inches='tight')
-    fig.savefig(out_path, dpi=600)
+    fig.savefig(out_path, dpi=600, bbox_inches='tight')
+    # fig.savefig(out_path, dpi=600)
 
 
 def compute_logdec(eigvals):
