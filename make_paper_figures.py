@@ -63,6 +63,9 @@ def build_rotor_and_models(bs_params):
     mat_M, mat_K_r, mat_C_g, mat_M_r, mat_M_a, F_mass, F_ex, unb,
     brgs, seals, support_dofs) = rotor_import(file_path=rotor_file, sheet_name=rotor_sheet, bs_params=bs_params)
 
+    unique_seals = {s.SealNet for s in seals}
+    n_type_seal = len(unique_seals)
+    
     model_brg = BearingNondModel()
     model_seal = SealDONModel()
     model_seal_leak = SealLeakModel()
@@ -73,6 +76,7 @@ def build_rotor_and_models(bs_params):
         'n_dof': n_dof,
         'n_brg': n_brg,
         'n_seal': n_seal,
+        'n_type_seal': n_type_seal,
         'rotor_elements': rotor_elements,
         'mat_M': mat_M,
         'mat_K_r': mat_K_r,
@@ -94,6 +98,7 @@ def calc_KC_for_design(X, ctx, w_vec):
     seals = ctx['seals']
     model_brg = ctx['model_brg']
     model_seal = ctx['model_seal']
+    n_type_seal = ctx['n_type_seal']
 
     # Parameter scalings
     f_brg_dim = np.array([[1, 1e-4], [1, 1e-4]])
@@ -109,7 +114,6 @@ def calc_KC_for_design(X, ctx, w_vec):
     K_brg, C_brg, _loss_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
 
     # Group seals by type
-    n_type_seal = 3
     groups = {}
     for i, s in enumerate(seals):
         groups.setdefault(s.SealNet, []).append(i)
