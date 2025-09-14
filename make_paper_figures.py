@@ -109,7 +109,7 @@ def calc_KC_for_design(X, ctx, w_vec):
     K_brg, C_brg, _loss_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
 
     # Group seals by type
-    n_type_seal = 3
+    n_type_seal = 4
     groups = {}
     for i, s in enumerate(seals):
         groups.setdefault(s.SealNet, []).append(i)
@@ -652,9 +652,10 @@ X_init = build_initial_X(ctx['n_brg'], ctx['n_seal']).astype(float)
 eig_init, amp_init = analyze_design(X_init, ctx, w_vec)
 L_init = compute_logdec(eig_init)
 
+ckpt_path = 'checkpoints/latest.npz'
 # --- Optimized design: pick one pareto solution ---
 try:
-    d = np.load('checkpoints/latest.npz')
+    d = np.load(ckpt_path)
     X_pop, F_pop = d['pop_X'], d['pop_F']
     X_pareto, F_pareto = d['opt_X'], d['opt_F']
     # choose by minimum total leakage as an example
@@ -666,13 +667,13 @@ except Exception:
 
 
 #%%
-# plot_campbell(eig_init, w_vec, out_path='initial_campbell.png')
-# plot_logdec_lowest(L_init, eig_init, w_vec, out_path='initial_logdec.png', n=4)
+plot_campbell(eig_init, w_vec, out_path='initial_campbell.png')
+plot_logdec_lowest(L_init, eig_init, w_vec, out_path='initial_logdec.png', n=4)
 
 # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance_brg.png', nodes='brg')
 # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance_seal.png', nodes='seal', figsize=figsize_DC_tall)
 # plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key', figsize=figsize_SC_s)
-# plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key', figsize=(6, 2.35))
+plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unbalance.png', nodes='key', figsize=(6, 2.35))
 
 
 
@@ -694,27 +695,28 @@ plt.show()
 
 #%%
 # --- Optimization results (Pareto visuals) ---
-save_optimization_plots('checkpoints/latest.npz', ctx['n_brg'])
+# save_optimization_plots('checkpoints/latest.npz', ctx['n_brg'])
+save_optimization_plots(ckpt_path, ctx['n_brg'])
+
+#%%
 
 
 
 
 
+#%%
+
+eig_opt, amp_opt = analyze_design(X_opt, ctx, w_vec)
+L_opt = compute_logdec(eig_opt)
+
+plot_campbell(eig_opt, w_vec, out_path='optimized_campbell_0.png')
+plot_logdec_lowest(L_opt, eig_opt, w_vec, out_path='optimized_logdec_0.png', n=4)
+# plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_0.png', nodes='key',figsize=figsize_SC_s)
+plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_0.png', nodes='key')
 
 
-# #%%
-
-# eig_opt, amp_opt = analyze_design(X_opt, ctx, w_vec)
-# L_opt = compute_logdec(eig_opt)
-
-# plot_campbell(eig_opt, w_vec, out_path='optimized_campbell_0.png')
-# plot_logdec_lowest(L_opt, eig_opt, w_vec, out_path='optimized_logdec_0.png', n=4)
-# # plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_0.png', nodes='key',figsize=figsize_SC_s)
-# plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_0.png', nodes='key')
-
-
-# plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_brg.png', nodes='brg')
-# plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_seal.png', nodes='seal')
+plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_brg.png', nodes='brg')
+plot_unbalance_response(amp_opt, w_vec, ctx, out_path='optimized_unbalance_seal.png', nodes='seal')
 
 
 #%%

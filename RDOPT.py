@@ -8,6 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 from solver_rotordyn import assemble_system_matrix
 from solver_rotordyn import eig_batch as eig
+from solver_rotordyn_sparse import eig_batch as eig
 from solver_rotordyn import unbalance_response_batch_cpu_parallel as unbalanced_response
 import time
 from scipy.signal import find_peaks
@@ -105,8 +106,8 @@ bs_params = {
     }
 
 n_w = 11
-n_pop = 200
-n_max_gen = 500
+n_pop = 100
+n_max_gen = 200
 
 ## Select algorithm
 
@@ -235,6 +236,15 @@ LB_cr = 10;  UB_cr = 30   # Cr/D = 10/10000 ~ 30/10000
 
 LB_h = 100; UB_h = 500 # seal clearance range
 LB_psr = -10;  UB_psr = 10   # -> *0.1 해서 [0,1.0]
+
+
+# ## optimization parameter
+# n_type_brg = 55 # brg types
+# LB_brg_idx = 40; UB_brg_idx = 41
+# LB_cr = 20;  UB_cr = 21   # Cr/D = 10/10000 ~ 30/10000
+
+# LB_h = 300; UB_h = 301 # seal clearance range
+# LB_psr = 0;  UB_psr = 1   # -> *0.1 해서 [0,1.0]
 
 ## Define optimization problem with vector computation
 n_var = 2 * n_brg + 3 * n_seal

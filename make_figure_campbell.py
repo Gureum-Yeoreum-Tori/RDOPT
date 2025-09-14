@@ -122,7 +122,7 @@ def calc_KC_for_design(X, ctx, w_vec):
         if idx.size == 0:
             continue
         params_t = X_seal[:, idx]
-        x_seal = (params_t.reshape(-1, 4) * f_seal_dim)
+        x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
         rdc_flat = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, w_vec.shape[0])
         leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))
         seal_rdc[:, idx] = rdc_flat
