@@ -106,7 +106,7 @@ bs_params = {
 
 n_w = 11
 n_pop = 200
-n_max_gen = 500
+n_max_gen = 400
 
 ## Select algorithm
 
