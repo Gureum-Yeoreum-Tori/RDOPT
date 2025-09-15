@@ -641,6 +641,11 @@ def pareto_plot_PCP(F, names, idx: Optional[np.ndarray] = None, out_path="pareto
     plot.set_axis_style(color="grey", alpha=0.5)
     plot.add(F, color="grey", alpha=0.3)
 
+    import matplotlib as mlp
+    from cycler import cycler
+    default_cycle = mlp.rcParams.get('axes.prop_cycle')    
+    colors = default_cycle.by_key().get('color')
+    
     # Normalize idx into indices, allow None/empty
     indices = np.array([], dtype=int)
     if idx is not None:
@@ -652,11 +657,10 @@ def pareto_plot_PCP(F, names, idx: Optional[np.ndarray] = None, out_path="pareto
                 indices = np.flatnonzero(idx_arr)
             elif idx_arr.size > 0:
                 indices = idx_arr.astype(int).ravel()
-
     for i, idc in enumerate(indices):
+        plot.add(np.atleast_2d(F[idc]), linewidth=3, linestyle='-',
+                 color=colors[i % len(colors)])
 
-        plot.add(np.atleast_2d(F[idc]), linewidth=3, linestyle='-')
-    # plot.save(out_path, dpi=600, bbox_inches="tight")
     plot.save(out_path, dpi=600, bbox_inches="tight")
 
     plot.show()
@@ -781,17 +785,21 @@ F_pareto_corrected = F_pareto * pareto_signs
 sel0 = np.argsort(F_pareto[:, 0])
 sel1 = np.argsort(F_pareto[:, 1])
 
-sel = [sel0[0], sel1[0]]
+# sel = [sel0[0], sel1[0]]
 
-pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel0[:5], figsize=figsize_SC_two_third_s)
-plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel,figsize=figsize_SC_one_third_s, xlim=[20,60], ylim=[1000,4000])
-plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel,figsize=figsize_SC, xlim=[20,40], ylim=[1000,2000])
+sel = sel0[:5]
+pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel, figsize=figsize_SC_two_third_s)
+plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel,figsize=figsize_SC_one_third_s, xlim=[22.5,30], ylim=[1000,4000])
 
-pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel0[:4], figsize=figsize_SC)
-plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel0[:4],figsize=figsize_SC, xlim=[20,40], ylim=[1000,4000])
+for i, case in enumerate(sel):
+    X = X_pareto[case,:].reshape(1,-1)
+    eig, amp, loss_brg, loss_brg_full, leak, F_init, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal = analyze_design(X, ctx, w_vec)
+    
+    plot_campbell(eig, w_vec, out_path=f'opt_cb_{i}.png')
+    plot_logdec(logdec, w_vec, out_path=f'opt_logdec_{i}.png')
+    plot_unbalance_response(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_SC_ss, show_lgd=True)
 
-pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel0[:4], figsize=figsize_SC_two_third_s)
-plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel0[:4],figsize=figsize_SC_one_third_s, xlim=[20,40], ylim=[1000,4000])
+
 #%%
 
 # choose by minimum total leakage as an example
@@ -799,4 +807,4 @@ idx = int(np.argmin(F_pareto[:, 0])) if len(F_pareto) else 0
 X_opt = X_pareto[idx:idx+1, :]
 
 plot_bearing_id_hist(X_pop, X_pareto, n_brg, figsize=figsize_SC_ss)
-# %%
+
