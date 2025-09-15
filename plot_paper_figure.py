@@ -642,7 +642,7 @@ def plot_unbalance_response_rpm(amp, w_vec, ctx, out_path, nodes='key', smooth_s
 
 
 
-def plot_unbalance_response_rated_speed(x_nodes, harmonic_resp, figsize=figsize_SC_ss, plot_rotor=False,
+def plot_unbalance_response_rated_speed(x_nodes, harmonic_resp, out_path, figsize=figsize_SC_ss, plot_rotor=False,
                                         rotor_elements=None, added_elements=None, brgs=None, seals=None, colors=None, ylim=None):
     _default_rcparams()
     lw = 1
@@ -670,7 +670,7 @@ def plot_unbalance_response_rated_speed(x_nodes, harmonic_resp, figsize=figsize_
     A_plot = A_signed * y_scale_resp
     
     if ylim is None:
-        ylim=np.ceil(np.max(np.abs(A_plot))/5)*5
+        ylim=np.ceil(np.max(np.abs(A_plot))/5+1)*5
 
     fig, ax1 = plt.subplots(figsize=figsize)
     ax1.plot(x_nodes,A_plot,'-', linewidth=2, zorder=5)
@@ -827,15 +827,17 @@ def plot_unbalance_response_rated_speed(x_nodes, harmonic_resp, figsize=figsize_
         ax.set_yticklabels([])
         ax.set_yticks([])
 
-        return ax
+        # return ax
     
     fig.tight_layout()
-    ax1.plot(x_nodes,A_plot,'-', linewidth=2, zorder=5)
-    ax1.plot(x_nodes,-A_plot,'-', linewidth=2, zorder=5)
-    ax1.set_ylabel('Ampliture (um)')
-    ax1.set_xlabel('Axial location (m)')
-    fig.savefig("unb_w_shaft_ini.png", dpi=600, bbox_inches="tight")
-    fig.show()
+    # ax1.plot(x_nodes,A_plot,'-', linewidth=2, zorder=5)
+    # ax1.plot(x_nodes,-A_plot,'-', linewidth=2, zorder=5)
+    # ax1.set_ylabel('Ampliture (um)')
+    # ax1.set_xlabel('Axial location (m)')
+    fig.savefig(out_path, dpi=600, bbox_inches="tight")
+    # fig.savefig('fuck.png', dpi=600, bbox_inches="tight")
+    # fig.show()
+    return fig, ax1
 
 
 
@@ -1000,7 +1002,7 @@ plot_unbalance_response_rpm(amp_init, w_vec, ctx, out_path='initial_unb.png', no
 w_op = np.array([w_oper])
 
 eig_init_oper, amp_init_oper, loss_brg_init_oper, loss_brg_full_init_oper, leak_init_oper, F_init_oper, peak_af_list_init_oper, peak_centers_list_init_oper, logdec_init_oper, amp_ratio_brg_init_oper, amp_ratio_seal_init_oper, harmonic_init_oper = analyze_design(X_init, ctx, w_op)
-plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=harmonic_init_oper, figsize=figsize_SC_ss, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals)
+plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=harmonic_init_oper, figsize=figsize_SC_ss, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals, out_path="initial_unb_shaft.png")
 
 
 # A_test.append(A_signed)
@@ -1069,6 +1071,9 @@ for i, case in enumerate(sel):
     plot_campbell(eig, w_vec, out_path=f'opt_cb_{i}.png')
     plot_logdec(logdec, w_vec, out_path=f'opt_logdec_{i}.png')
     plot_unbalance_response_rpm(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_SC_ss, show_lgd=True)
+    
+    _, _, _, _, _, _, _, _, _, _, _, harmonic_oper= analyze_design(X, ctx, w_op)
+    plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=harmonic_oper, out_path=f'opt_unb_shaft{i}.png', figsize=figsize_SC_ss, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals)
 
 
 #%%
