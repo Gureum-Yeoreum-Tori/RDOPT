@@ -528,6 +528,19 @@ class RotordynamicProblem(Problem):
         brg_nodes = np.array([b.node for b in brgs], dtype=int)
         seal_nodes = np.array([s.node for s in seals], dtype=int)
         cal_nodes = np.unique(np.concatenate([brg_nodes, seal_nodes]))
+        
+        Bx = np.stack([Ux.real, -Ux.imag], axis=-1)      # (..., 2)
+        By = np.stack([Uy.real, -Uy.imag], axis=-1)      # (..., 2)
+        B  = np.stack([Bx, By], axis=-2)                 # (..., 2, 2)
+
+        U, S, Vt = np.linalg.svd(B)                      # batched SVD
+        amp = S[..., 0]                                    # 진짜 최대 진폭 (장반경)
+        b_amp = S[..., 1]                                    # 최소 진폭 (단반경)
+
+        # 장축 방향과 최대가 생기는 위상(원하면)
+        psi   = np.arctan2(U[..., 1, 0], U[..., 0, 0])   # 장축 각
+        tstar = np.arctan2(Vt[..., 0, 1], Vt[..., 0, 0]) # 피크 위상
+        alpha = -tstar
 
         eps = 1e-18
         AF_max = np.zeros(pop, dtype=float)
