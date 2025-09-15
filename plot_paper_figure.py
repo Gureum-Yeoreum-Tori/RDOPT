@@ -106,6 +106,7 @@ def build_rotor_and_models(bs_params):
         'model_brg': model_brg,
         'model_seal': model_seal,
         'model_seal_leak': model_seal_leak,
+        'added_elements': added_elements,
     }
 
 def calc_KC_for_design(X, ctx, w_vec):
@@ -317,7 +318,7 @@ def analyze_design(X, ctx, w_vec):
     else:
         F[:, 5] = 0.0
 
-    return eigvals, amp, loss_brg, loss_brg_full, leak, F, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal
+    return eigvals, amp, loss_brg, loss_brg_full, leak, F, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal, harmonic
 
 
 #%%
@@ -338,8 +339,18 @@ def plot_campbell(eigvals, w_vec, out_path, title=None, ylim_rpm=(0, 7000), figs
     # excitation (1x) line in Hz
     exc = rpm / 60.0
     
+    ax.plot(rpm, exc, 'k-', lw=1.0, label='1x')
+    
     for k in idx:
-        line, = ax.plot(rpm, beta[:, k], '-')
+        if k == 0:
+            suffix='st'
+        elif k == 1:
+            suffix='nd'
+        elif k == 2:
+            suffix='rd'
+        else:
+            suffix='st'
+        line, = ax.plot(rpm, beta[:, k], '-', label=f'{k}{suffix} F')
         
     for k in idx:
         cross_rpm = []
@@ -363,7 +374,6 @@ def plot_campbell(eigvals, w_vec, out_path, title=None, ylim_rpm=(0, 7000), figs
                     markeredgewidth=1.1)
             
     # plot 1x line last so it stays visible bu under markers
-    ax.plot(rpm, exc, 'k-', lw=1.0)
     ax.set_xlabel('Rotational speed (RPM)')
     ax.set_ylabel('Frequency (Hz)')
     if title:
@@ -373,6 +383,7 @@ def plot_campbell(eigvals, w_vec, out_path, title=None, ylim_rpm=(0, 7000), figs
     start, end = ax.get_xlim()
     ax.xaxis.set_ticks(np.arange(start, end+0.1, 1400))
     ax.grid(True, alpha=0.3)
+    ax.legend()
     fig.tight_layout()
     fig.savefig(out_path, dpi=600, bbox_inches='tight')
 
@@ -449,8 +460,8 @@ def plot_bearing_id_hist(X_pop, X_par, n_brg, idx=None, figsize=figsize_SC_s):
     ids_pop = X_pop[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
     ids_par = X_par[:, :2*n_brg].reshape(-1, n_brg, 2)[:,:,0].ravel()
     fig, ax = plt.subplots(figsize=figsize)
-    ax.hist(ids_pop, bins=np.arange(1,55)+1, alpha=0.4, rwidth=0.8, align='mid',label='pop')
-    ax.hist(ids_par, bins=np.arange(1,55)+1, alpha=0.8, rwidth=0.8, align='mid',label='pareto')
+    ax.hist(ids_pop, bins=np.arange(1,55)+1, alpha=0.4, rwidth=0.8, align='mid',label='Cand.')
+    ax.hist(ids_par, bins=np.arange(1,55)+1, alpha=0.8, rwidth=0.8, align='mid',label='Pareto')
     
     # boundaries = [4, 5, 9, 15, 19, 23, 39, 55]   # 각 타입 끝 ID
     # labels = ["Axial grooved", "Pressure dam", "Partial arc", "2-Lobe", "3-Lobe", "4-Lobe", "4-Pad tilting", "5-Pad tilting"]
@@ -530,7 +541,7 @@ def plot_bearing_id_hist(X_pop, X_par, n_brg, idx=None, figsize=figsize_SC_s):
 
 
 
-def plot_unbalance_response(amp, w_vec, ctx, out_path, nodes='key', smooth_spline=True, figsize=figsize_DC, show_lgd=False):
+def plot_unbalance_response_rpm(amp, w_vec, ctx, out_path, nodes='key', smooth_spline=True, figsize=figsize_DC, show_lgd=False):
     _default_rcparams()
     import matplotlib as mlp
     from cycler import cycler
@@ -629,6 +640,210 @@ def plot_unbalance_response(amp, w_vec, ctx, out_path, nodes='key', smooth_splin
 
 
 
+
+
+def plot_unbalance_response_rated_speed(x_nodes, harmonic_resp, figsize=figsize_SC_ss, plot_rotor=False,
+                                        rotor_elements=None, added_elements=None, brgs=None, seals=None, colors=None, ylim=None):
+    _default_rcparams()
+    lw = 1
+    n_dof = x_nodes.shape[0]*4
+    h = harmonic_resp.squeeze()
+    hx = h[np.arange(0,n_dof,4)]
+    hy = h[np.arange(2,n_dof,4)]
+
+    t = np.linspace(0,2*np.pi,12)
+    qx = np.real(hx.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
+    qy = np.real(hy.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
+
+    q = np.sqrt(qx**2 + qy**2)
+    i_max = np.argmax(np.max(q,axis=1))
+    i_psi = np.argmax(q[i_max,:])
+    alpha = np.atan(qy[i_max,i_psi]/qx[i_max,i_psi])
+
+    hx_r = hx * np.exp(1j * alpha)
+    hy_r = hy * np.exp(1j * alpha)
+    theta = 0.0
+    A_signed = np.real(hx_r * np.cos(theta) + hy_r * np.sin(theta))
+
+    # Use response as the Y-axis scale (in micrometers)
+    y_scale_resp = 1e6  # meters -> micrometers
+    A_plot = A_signed * y_scale_resp
+    
+    if ylim is None:
+        ylim=np.ceil(np.max(np.abs(A_plot))/5)*5
+
+    fig, ax1 = plt.subplots(figsize=figsize)
+    ax1.plot(x_nodes,A_plot,'-', linewidth=2, zorder=5)
+    ax1.plot(x_nodes,-A_plot,'-', linewidth=2, zorder=5)
+    ax1.set_ylabel('Ampliture (um)')
+    ax1.set_xlabel('Axial location (m)')
+    ax1.set_ylim(-ylim, ylim)
+
+    if plot_rotor:
+        from matplotlib.patches import Rectangle, Circle
+
+        if colors is None:
+            colors = {
+                'outer': "#2133BB",
+                'outer': "#737976",
+                'inner': '0.35',
+                'added': 'tab:purple',
+                'spring_brg': 'tab:red',
+                'damper_brg': 'tab:green',
+                'spring_seal': 'tab:orange',
+                'damper_seal': 'tab:blue',
+                'center': "#A7A7A7",
+            }
+        
+        alpha = 1.0
+        vec_L = np.array([e.L for e in rotor_elements], dtype=float)
+        x_nodes = np.concatenate([[0.0], np.cumsum(vec_L)])
+        # Create axes if needed
+        ax = ax1.twinx()
+        created_ax = True
+
+        ax.axhline(0, color=colors['center'], zorder=1, linestyle='--')
+
+        rmax = 0.0
+        for i, e in enumerate(rotor_elements):
+            x0, L = x_nodes[i], float(e.L)
+            ro = 0.5 * float(e.Od)
+            ri = 0.5 * float(e.Id)
+            rmax = max(rmax, ro)
+
+            if ro > 0 and L > 0:
+                rect = Rectangle((x0, -ro), width=L, height=2*ro,
+                                fill=False, edgecolor=colors['outer'], zorder=3,alpha=alpha)
+                ax.add_patch(rect)
+        
+        def draw_disk(ax, x0, h, r, label=None):
+            arm_x = [x0, x0]
+            arm_y = [-h/2, h/2]
+            color = '#0D7441'
+            color = '#737976'
+            ax.plot(arm_x, arm_y, color=color, lw=lw, label=label, alpha=alpha)
+            
+            circ = Circle((x0,h/2+r),r , color=color, fill=False, lw=lw, alpha=alpha)
+            ax.add_patch(circ)
+            circ = Circle((x0,-h/2-r),r , color=color, fill=False, lw=lw, alpha=alpha)
+            ax.add_patch(circ)
+
+        r_disk = 0.025
+        added_D_max = 0.0
+        if added_elements:
+            for a in added_elements: 
+                added_D_max = max(added_D_max,a.Od)
+            added_D_max *= 1.2
+            for idx, a in enumerate(added_elements): 
+                x0 = x_nodes[int(a.node)]
+                added_D_max = max(added_D_max,a.Od)
+                label = None
+                if idx == 0:
+                    label = "Disk"
+                draw_disk(ax, x0=x0, h=added_D_max, r=r_disk, label=label)
+        rmax = max(rmax, added_D_max/2.0)
+
+        n_ele = len(rotor_elements)
+        ro_nodes = np.zeros_like(x_nodes)
+        for i in range(n_ele + 1):
+            left_ro = 0.5 * rotor_elements[i-1].Od if i > 0 else 0.5 * rotor_elements[0].Od
+            right_ro = 0.5 * rotor_elements[i].Od if i < n_ele else 0.5 * rotor_elements[-1].Od
+            ro_nodes[i] = max(left_ro, right_ro)
+        if added_elements:
+            for a in added_elements:
+                ro_nodes[int(a.node)] = max(ro_nodes[int(a.node)], 0.5*float(a.Od))
+
+                
+        def draw_xbox(ax, x0, w, h, label=None):
+            rect = Rectangle((x0-w/2, -h/2), width=w, height=h,
+                            fill=True, facecolor='#737976', edgecolor="#737976", lw=lw, label=label, alpha=alpha)
+            # rect = Rectangle((x0-w/2, -h/2), width=w, height=h,
+            #                 fill=True, facecolor='#B8BEBB', edgecolor="#737976", lw=lw, label=label, alpha=alpha)
+            ax.add_patch(rect)
+            # xx = [x0-w/2, x0+w/2]
+            # yx = [-h/2, h/2]
+            # ax.plot(xx, yx, color="#737976", lw=0.9*lw, alpha=alpha)
+            # xx = [x0-w/2, x0+w/2]
+            # yx = [h/2, -h/2]
+            # ax.plot(xx, yx, color='#737976', lw=0.9*lw, alpha=alpha)
+            
+        def draw_seal(ax, x0, w, ri, h, c, color=None,label=None):
+            
+            if color is None:
+                color = "#4F60BE"
+            
+            # rect = Rectangle((x0-w/2, -ro-c), width=w, height=h,
+            #                 fill=True, facecolor="#4F60BE", edgecolor="#4F60BE", lw=lw, label=label)
+            rect = Rectangle((x0-w/2, -ri-c-h), width=w, height=h,
+                            fill=True, facecolor=color, edgecolor=color, lw=lw, label=label, alpha=alpha)
+            ax.add_patch(rect)
+            rect = Rectangle((x0-w/2, ri+c), width=w, height=h,
+                            fill=True, facecolor=color, edgecolor=color, lw=lw, alpha=alpha)
+            ax.add_patch(rect)
+            
+        if brgs:
+            for idx, b in enumerate(brgs):
+                j = int(b.node)
+                xb = x_nodes[j]
+                label = None
+                if idx == 0:
+                    label = "Bearing"
+                draw_xbox(ax, x0=xb, w=0.1, h=ro_nodes[j]*2.4, label=label)
+        seal_colors = {0: "#4F60BE",
+                    1: "#E79D1C",
+                    2: "#9806EC",
+                    3: "#2789EC"}
+        seal_colors = {0: "#A7A6A6",
+                    1: "#A7A6A6",
+                    2: "#A7A6A6",
+                    3: "#A7A6A6"}
+        
+        seal_types = {0: "1st Imp.",
+                    1: "Stage bush",
+                    2: "Series Imp.",
+                    3: "Balance piston"}
+        
+        if seals:
+            unique_seals = {s.SealNet for s in seals}
+            n_type_seal = len(unique_seals)
+            ploted_seal = np.zeros(n_type_seal, dtype=bool)
+            for idx, s in enumerate(seals):
+                j = int(s.node)
+                xs = x_nodes[j]
+                color_ = seal_colors[int(s.SealNet-1)]
+                c = 0.005
+                label = None
+                if not ploted_seal[int(s.SealNet-1)]:
+                    ploted_seal[int(s.SealNet-1)] = True
+                    label = seal_types[int(s.SealNet-1)]
+                    
+                draw_seal(ax, x0=xs, w=max(s.Ls,0.045), ri=s.Ds/2, h=0.04, c=c, label=label,color=color_)
+        xmin, xmax = x_nodes.min(), x_nodes.max()
+        ax.set_xlim(xmin - 0.02*(xmax-xmin), xmax + 0.02*(xmax-xmin))
+        ax.set_xlabel('Axial location (m)')
+        ax.set_ylim(-2*rmax, 2*rmax)
+        # ax.set_ylabel('Shaft radius (m)')
+        ax.xaxis.grid(True, zorder=1)
+        ax.set_yticklabels([])
+        ax.set_yticks([])
+
+        return ax
+    
+    fig.tight_layout()
+    ax1.plot(x_nodes,A_plot,'-', linewidth=2, zorder=5)
+    ax1.plot(x_nodes,-A_plot,'-', linewidth=2, zorder=5)
+    ax1.set_ylabel('Ampliture (um)')
+    ax1.set_xlabel('Axial location (m)')
+    fig.savefig("unb_w_shaft_ini.png", dpi=600, bbox_inches="tight")
+    fig.show()
+
+
+
+
+
+
+
+
 def pareto_plot_PCP(F, names, idx: Optional[np.ndarray] = None, out_path="pareto_PCP.png", figsize=figsize_DC):
     _default_rcparams()
     # import matplotlib.pyplot as plt
@@ -659,7 +874,7 @@ def pareto_plot_PCP(F, names, idx: Optional[np.ndarray] = None, out_path="pareto
                 indices = idx_arr.astype(int).ravel()
     for i, idc in enumerate(indices):
         plot.add(np.atleast_2d(F[idc]), linewidth=3, linestyle='-',
-                 color=colors[i % len(colors)])
+                color=colors[i % len(colors)])
 
     plot.save(out_path, dpi=600, bbox_inches="tight")
 
@@ -704,17 +919,14 @@ def pareto_plot_RAD(F, names, idx: Optional[np.ndarray] = None, figsize=figsize_
             elif idx_arr.size > 0:
                 indices = idx_arr.astype(int).ravel()
 
-    first_colors = ["red", "blue", "green"]
-    default_cycle = plt.rcParams.get('axes.prop_cycle')
-    cycle_colors = (default_cycle.by_key().get('color',
-                    ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9'])) if default_cycle else ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9']
+    
+    import matplotlib as mlp
+    from cycler import cycler
+    default_cycle = mlp.rcParams.get('axes.prop_cycle')    
+    colors = default_cycle.by_key().get('color')
 
     for i, idc in enumerate(indices):
-        # if i < 3:
-        #     color = first_colors[i]
-        # else:
-        #     color = cycle_colors[(i - 3) % len(cycle_colors)]
-        color = cycle_colors[(i - 3) % len(cycle_colors)]
+        color = colors[(i - 3) % len(colors)]
         plot.add(np.atleast_2d(F[idc]), linewidth=2)
     plot.save("pareto_RAD.png", dpi=600, bbox_inches="tight")
     plot.show()
@@ -723,18 +935,21 @@ def pareto_plot_RAD(F, names, idx: Optional[np.ndarray] = None, figsize=figsize_
 
 def plot_2factor(F_pop,F_par,ip,idx=None,figsize=figsize_SC_one_third_s, xlim=None, ylim=None):
     plt.figure(figsize=figsize)
-    plt.scatter(F_pop[:, ip[0]], F_pop[:, ip[1]], s=10, alpha=0.5,facecolors='none', edgecolors='grey', label="Population")
-    plt.scatter(F_par[:, ip[0]], F_par[:, ip[1]], s=20, alpha=0.7, facecolors="#FB7AE1", edgecolors="#FB7AE1", label="Pareto")
+    plt.scatter(F_pop[:, ip[0]], F_pop[:, ip[1]], s=10, alpha=0.5,facecolors='none', edgecolors='grey', label="Cand.")
     if idx is not None:
+        idx_not_sel = np.setdiff1d(np.arange(0,F_par.shape[0]),idx)
+        plt.scatter(F_par[idx_not_sel, ip[0]], F_par[idx_not_sel, ip[1]], s=20, facecolors="#FB7AE1", edgecolors="#FB7AE1", label="Pareto")
         for i, sel in enumerate(idx):
-            plt.scatter(F_par[sel, ip[0]], F_par[sel, ip[1]], marker='*', s=40, label=f'Design {i+1}')
+            plt.scatter(F_par[sel, ip[0]], F_par[sel, ip[1]], marker='*', s=50, label=f'Design {i+1}')
+    else:
+        plt.scatter(F_par[:, ip[0]], F_par[:, ip[1]], s=20, facecolors="#FB7AE1", edgecolors="#FB7AE1", label="Pareto")
     
     plt.xlabel('Seal leakage (kg/s)')
     plt.ylabel('Bearing power loss (W)')
     plt.legend(loc=1)
-    plt.savefig("pareto_2factor.png", dpi=600, bbox_inches="tight")
     plt.xlim(xlim)
     plt.ylim(ylim)
+    plt.savefig("pareto_2factor.png", dpi=600, bbox_inches="tight")
     plt.show()
 
 
@@ -753,6 +968,14 @@ bs_params = {
 
 ctx = build_rotor_and_models(bs_params)
 
+rotor_elements = ctx['rotor_elements']
+added_elements = ctx['added_elements']
+brgs = ctx['brgs']
+seals = ctx['seals']
+
+vec_L = np.array([e.L for e in rotor_elements], dtype=float)
+x_nodes = np.concatenate([[0.0], np.cumsum(vec_L)])
+
 # --- Initial/reference design (programmatic, matches n_brg/n_seal) ---
 def build_initial_X(n_brg):
     X_brg = np.tile([2, 15], (n_brg, 1))
@@ -765,12 +988,52 @@ def build_initial_X(n_brg):
 
 X_init = build_initial_X(ctx['n_brg']).astype(float)
 
-eig_init, amp_init, loss_brg_init, loss_brg_full_init, leak_init, F_init, peak_af_list_init, peak_centers_list_init, logdec_init, amp_ratio_brg_init, amp_ratio_seal_init = analyze_design(X_init, ctx, w_vec)
+eig_init, amp_init, loss_brg_init, loss_brg_full_init, leak_init, F_init, peak_af_list_init, peak_centers_list_init, logdec_init, amp_ratio_brg_init, amp_ratio_seal_init, harmonic_init = analyze_design(X_init, ctx, w_vec)
 
 #%%
 plot_campbell(eig_init, w_vec, out_path='initial_campbell.png')
 plot_logdec(logdec_init, w_vec, out_path='initial_logdec.png')
-plot_unbalance_response(amp_init, w_vec, ctx, out_path='initial_unb.png', nodes='key', figsize=figsize_SC_ss, show_lgd=True)
+plot_unbalance_response_rpm(amp_init, w_vec, ctx, out_path='initial_unb.png', nodes='key', figsize=figsize_SC_ss, show_lgd=True)
+
+#%%
+
+w_op = np.array([w_oper])
+
+eig_init_oper, amp_init_oper, loss_brg_init_oper, loss_brg_full_init_oper, leak_init_oper, F_init_oper, peak_af_list_init_oper, peak_centers_list_init_oper, logdec_init_oper, amp_ratio_brg_init_oper, amp_ratio_seal_init_oper, harmonic_init_oper = analyze_design(X_init, ctx, w_op)
+plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=harmonic_init_oper, figsize=figsize_SC_ss, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals)
+
+
+# A_test.append(A_signed)
+# print(alpha)
+
+# A_test = []
+# for n_t in np.arange(2,360,5):
+#     t = np.linspace(0,2*np.pi,n_t)
+#     qx = np.real(hx.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
+#     qy = np.real(hy.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
+
+#     q = np.sqrt(qx**2 + qy**2)
+#     i_max = np.argmax(np.max(q,axis=1))
+#     i_psi = np.argmax(q[i_max,:])
+#     alpha = np.atan(qy[i_max,i_psi]/qx[i_max,i_psi])
+
+#     hx_r = hx * np.exp(1j * alpha)
+#     hy_r = hy * np.exp(1j * alpha)
+#     theta = 0.0
+#     A_signed = np.real(hx_r * np.cos(theta) + hy_r * np.sin(theta))
+#     A_test.append(A_signed)
+#     print(alpha)
+    
+
+# A_test[0] - A_test[1]
+
+
+
+
+
+
+
+
 
 #%%
 d = np.load('checkpoints/latest.npz')
@@ -788,16 +1051,24 @@ sel1 = np.argsort(F_pareto[:, 1])
 # sel = [sel0[0], sel1[0]]
 
 sel = sel0[:5]
+sel = sel[[2,1,3]]
 pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel, figsize=figsize_SC_two_third_s)
-plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel,figsize=figsize_SC_one_third_s, xlim=[22.5,30], ylim=[1000,4000])
+pareto_plot_RAD(F=F_pareto_corrected, names=obj_names, idx=sel)
+plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel,figsize=figsize_SC_one_third_s, xlim=[22,30], ylim=[1000,4000])
 
+
+
+
+
+
+#%%
 for i, case in enumerate(sel):
     X = X_pareto[case,:].reshape(1,-1)
-    eig, amp, loss_brg, loss_brg_full, leak, F_init, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal = analyze_design(X, ctx, w_vec)
+    eig, amp, loss_brg, loss_brg_full, leak, F_init, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal, harmonic_init = analyze_design(X, ctx, w_vec)
     
     plot_campbell(eig, w_vec, out_path=f'opt_cb_{i}.png')
     plot_logdec(logdec, w_vec, out_path=f'opt_logdec_{i}.png')
-    plot_unbalance_response(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_SC_ss, show_lgd=True)
+    plot_unbalance_response_rpm(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_SC_ss, show_lgd=True)
 
 
 #%%
@@ -807,4 +1078,3 @@ idx = int(np.argmin(F_pareto[:, 0])) if len(F_pareto) else 0
 X_opt = X_pareto[idx:idx+1, :]
 
 plot_bearing_id_hist(X_pop, X_pareto, n_brg, figsize=figsize_SC_ss)
-
