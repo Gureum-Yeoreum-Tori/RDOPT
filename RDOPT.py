@@ -385,6 +385,11 @@ class RotordynamicProblem(Problem):
     
     def _evaluate_impl(self, X, out, *args, **kwargs):
         pop = X.shape[0]
+        # np.savez_compressed(
+        #     'X.npz',
+        #     pop_X=X,
+        #     # time=time.time(),
+        # )
         X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
         X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
         
@@ -732,7 +737,18 @@ else:
     print("optimization algorithm not defined")
     raise ValueError()
 
+def debug_cb(algorithm):
+    pop = algorithm.pop
+    if pop is None:
+        print("pop is None"); return
+    F = pop.get("F"); G = pop.get("G")
+    print(f"gen={algorithm.n_gen}, pop={len(pop)}",
+        f"F_shape={None if F is None else F.shape}",
+        f"G_shape={None if G is None else G.shape}",
+        f"nanF={None if F is None else np.isnan(F).sum()}",
+        f"nanG={None if G is None else (None if G is None else np.isnan(G).sum())}")
 
+algorithm.callback = debug_cb
 from pymoo.core.termination import TerminateIfAny
 from pymoo.termination.default import DefaultMultiObjectiveTermination
 from pymoo.termination.max_gen import MaximumGenerationTermination
@@ -743,7 +759,7 @@ problem = RotordynamicProblem()
 print("Done >.<\n\n\n")
 #%%
 
-print("Starting optimization...")
+print("optimization started...")
 t_start = time.time()
 
 res = minimize(
