@@ -191,7 +191,7 @@ def analyze_design(X, ctx, w_vec):
     
     K_all, Ceff_all = assemble_system_matrix(mat_K_r, C_struct, mat_C_g, w_vec, rows_sup, cols_sup, K_vals, C_vals)
 
-    eigvals, _ = eig_batch(M=mat_M, K_all=K_all, Ceff_all=Ceff_all, track=True)
+    eigvals, eigvecs = eig_batch(M=mat_M, K_all=K_all, Ceff_all=Ceff_all, track=True)
 
     harmonic = unbalance_response_batch_cpu_parallel(
         M=mat_M, unb=unb, K_all=K_all, Ceff_all=Ceff_all, w_vec=w_vec
@@ -353,7 +353,7 @@ def analyze_design(X, ctx, w_vec):
     else:
         F[:, 5] = 0.0
 
-    return eigvals, amp, loss_brg, loss_brg_full, leak, F, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal, harmonic
+    return eigvals, amp, loss_brg, loss_brg_full, leak, F, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal, harmonic, eigvecs
 
 
 #%%
@@ -838,8 +838,8 @@ def plot_unbalance_response_rated_speed(x_nodes, harmonic_resp, out_path, figsiz
         ylim=np.ceil(np.max(np.abs(A_plot))/5+1)*5
 
     fig, ax1 = plt.subplots(figsize=figsize)
-    ax1.plot(x_nodes,A_plot,'-', linewidth=2, zorder=5)
-    ax1.plot(x_nodes,-A_plot,'-', linewidth=2, zorder=5)
+    ax1.plot(x_nodes,A_plot,'-o', linewidth=2, zorder=5)
+    # ax1.plot(x_nodes,-A_plot,'-o', linewidth=2, zorder=5)
     ax1.set_ylabel('Ampliture (um)')
     ax1.set_xlabel('Axial location (m)')
     ax1.set_ylim(-ylim, ylim)
@@ -993,7 +993,16 @@ def plot_unbalance_response_rated_speed(x_nodes, harmonic_resp, out_path, figsiz
         ax.set_yticks([])
 
         # return ax
+    ax2 = ax.twinx()
+    ax2.plot(x_nodes,A_plot,'-o', linewidth=2)
+    ax2.set_ylim(-ylim, ylim)
+    ax1.set_yticklabels([])
+    ax1.set_yticks([])
+    ax2.set_yticklabels([])
+    ax2.set_yticks([])
+    ax1.set_ylabel('')
     
+    # ax2.plot(x_nodes,-A_plot,'-', linewidth=2)
     fig.tight_layout()
     # ax1.plot(x_nodes,A_plot,'-', linewidth=2, zorder=5)
     # ax1.plot(x_nodes,-A_plot,'-', linewidth=2, zorder=5)
@@ -1385,8 +1394,6 @@ def plot_2factor(F_pop,F_par,ip,idx=None,figsize=figsize_SC_one_third_s, xlim=No
     plt.show()
 
 
-#%%
-
 w_range = np.array([500, 7000]) * np.pi / 30
 n_w = 11
 w_vec = np.linspace(w_range[0], w_range[1], n_w)
@@ -1421,7 +1428,18 @@ def build_initial_X(n_brg):
 
 X_init = build_initial_X(ctx['n_brg']).astype(float)
 
-eig_init, amp_init, loss_brg_init, loss_brg_full_init, leak_init, F_init, peak_af_list_init, peak_centers_list_init, logdec_init, amp_ratio_brg_init, amp_ratio_seal_init, harmonic_init = analyze_design(X_init, ctx, w_vec)
+eig_init, amp_init, loss_brg_init, loss_brg_full_init, leak_init, F_init, peak_af_list_init, peak_centers_list_init, logdec_init, amp_ratio_brg_init, amp_ratio_seal_init, harmonic_init, eigvecs_init = analyze_design(X_init, ctx, w_vec)
+
+
+
+
+
+
+
+
+
+
+
 
 #%%
 plot_campbell(eig_init, w_vec, out_path='ini_campbell.png')
@@ -1432,7 +1450,7 @@ plot_unbalance_response_rpm(amp_init, w_vec, ctx, out_path='ini_unb.png', nodes=
 
 w_op = np.array([w_oper])
 
-eig_init_oper, amp_init_oper, loss_brg_init_oper, loss_brg_full_init_oper, leak_init_oper, F_init_oper, peak_af_list_init_oper, peak_centers_list_init_oper, logdec_init_oper, amp_ratio_brg_init_oper, amp_ratio_seal_init_oper, harmonic_init_oper = analyze_design(X_init, ctx, w_op)
+eig_init_oper, amp_init_oper, loss_brg_init_oper, loss_brg_full_init_oper, leak_init_oper, F_init_oper, peak_af_list_init_oper, peak_centers_list_init_oper, logdec_init_oper, amp_ratio_brg_init_oper, amp_ratio_seal_init_oper, harmonic_init_oper, _ = analyze_design(X_init, ctx, w_op)
 
 plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=harmonic_init_oper, figsize=figsize_SC_ss, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals, out_path="ini_unb_shaft.png",ylim=25)
 
@@ -1473,13 +1491,13 @@ plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel,figsize=figs
 #%%
 for i, case in enumerate(sel):
     X = X_pareto[case,:].reshape(1,-1)
-    eig, amp, loss_brg, loss_brg_full, leak, F_init, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal, _ = analyze_design(X, ctx, w_vec)
+    eig, amp, loss_brg, loss_brg_full, leak, F_init, peak_af_list, peak_centers_list, logdec, amp_ratio_brg, amp_ratio_seal, _, eigvecs = analyze_design(X, ctx, w_vec)
     
     plot_campbell(eig, w_vec, out_path=f'opt_cb_{i}.png')
     plot_logdec(logdec, w_vec, out_path=f'opt_logdec_{i}.png')
     plot_unbalance_response_rpm(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_SC_sss, show_lgd=True)
     
-    _, _, _, _, _, _, _, _, _, _, _, harmonic_oper= analyze_design(X, ctx, w_op)
+    _, _, _, _, _, _, _, _, _, _, _, harmonic_oper, _= analyze_design(X, ctx, w_op)
     plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=harmonic_oper, out_path=f'opt_unb_shaft{i}.png', figsize=figsize_SC_sss, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals,ylim=25)
 
 
@@ -1495,7 +1513,7 @@ plot_bearing_id_hist(X_pop, X_pareto, n_brg, figsize=figsize_SC_ss)
 
 X = np.concatenate((X_init,X_pareto[sel,:]))
 
-_, _, _, _, _, _, _, _, _, _, _, harmonic_oper_sel= analyze_design(X, ctx, w_op)
+_, _, _, _, _, _, _, _, _, _, _, harmonic_oper_sel, _= analyze_design(X, ctx, w_op)
 
 # np.argmax(F_pareto[:,1])
 # F_pareto[45,:]
@@ -1553,3 +1571,56 @@ if gens:
     fig.tight_layout()
     fig.savefig('obj_history.png', dpi=600, bbox_inches='tight')
     fig.show()
+
+#%%
+
+dw = np.imag(eig_init).squeeze().T - w_vec
+plt.plot(w_vec,dw.T,'-o')
+plt.ylim(-100,100)
+plt.axhline(0,color='k')
+
+def plot_modeshape(x_nodes, phi):
+    n_node = x_nodes.shape[0]
+    n_dof = n_node*4
+    x = phi[np.arange(0,n_dof,4)]
+    y = phi[np.arange(2,n_dof,4)]
+
+    t = np.linspace(0,2*np.pi,12)
+    qx = np.real(x.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
+    qy = np.real(y.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
+    
+    qx = qx.reshape(n_node,-1)
+    qy = qy.reshape(n_node,-1)
+    
+    q = np.sqrt(qx**2 + qy**2)
+
+    i_max = np.argmax(np.max(q,axis=1))
+    i_psi = np.argmax(q[i_max,:])
+    alpha = np.atan(qy[i_max, i_psi] / qx[i_max, i_psi])
+
+    # alpha=0
+    x_r = x * np.exp(1j * alpha)
+    y_r = y * np.exp(1j * alpha)
+    theta = 0.0
+    A_signed = np.real(x_r * np.cos(theta) + y_r * np.sin(theta))
+
+
+    plt.plot(x_nodes,A_signed,'-o')
+    plt.tight_layout()
+    plt.show()
+    
+    return
+
+
+phi = eigvecs_init[0,5,:,3]
+plot_modeshape(x_nodes=x_nodes,phi=phi)
+
+for i in range(8):
+    phi = eigvecs_init[0,5,:,i]
+    print(f'mode: {i}')
+    plot_modeshape(x_nodes=x_nodes,phi=phi)
+    
+eigve = np.expand_dims(eigvecs_init[:,5,:,3],axis=(1,3))
+
+
+plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=eigve, out_path=f'modeshape.png', figsize=figsize_SC_s, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals,ylim=50000)
