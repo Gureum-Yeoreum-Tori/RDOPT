@@ -1508,26 +1508,32 @@ plot_unbalance_response_rated_speed_all(x_nodes, harmonic_resp=harmonic_oper_sel
 
 
 
-import glob, re
-files = sorted(glob.glob('checkpoints/gen_*.npz'))
 gens, bests = [], []
-for f in files:
-    m = re.search(r"gen_(\d+)\.npz$", f)
-    gnum = int(m.group(1)) if m else None
-    with np.load(f) as nd:
-        if 'pop_F' in nd.files:
-            pop_F_signed = nd['pop_F'] * pareto_signs
-            best = np.min(pop_F_signed,axis=0)
-        elif 'opt_F' in nd.files:
-            pop_F_signed = nd['opt_F'] * pareto_signs
-            best = np.min(pop_F_signed,axis=0)
-        else:
-            continue
-    if gnum is None:
-        continue
-    gens.append(gnum)
-    bests.append(best)
+# check the gen in latest.npz and read data up to that generation only (faster than scanning all files)
+try:
+    with np.load('checkpoints/latest.npz') as ld:
+        latest_gen = int(ld['gen']) if 'gen' in ld.files else None
+except Exception:
+    latest_gen = None
 
+if latest_gen is not None and latest_gen >= 0:
+    for gnum in range(latest_gen + 1):
+        f = f'checkpoints/gen_{gnum:04d}.npz'
+        if not os.path.exists(f):
+            continue
+        with np.load(f) as nd:
+            if 'pop_F' in nd.files:
+                pop_F_signed = nd['pop_F'] * pareto_signs
+                best = np.min(pop_F_signed, axis=0)
+            elif 'opt_F' in nd.files:
+                pop_F_signed = nd['opt_F'] * pareto_signs
+                best = np.min(pop_F_signed, axis=0)
+            else:
+                continue
+        gens.append(gnum)
+        bests.append(best)
+
+i_obj = [0, 2, 3, 4, 5, 1]
 
 if gens:
     order = np.argsort(gens)
@@ -1536,12 +1542,14 @@ if gens:
     fig, ax = plt.subplots(figsize=figsize_SC_ss)
     ax.plot(ug, bv[:,[0,2,3,4,5]], '-', ms=3)
     ax.plot(ug, bv[:,[1]], '-', color="#FB7AE1")
-    ax.legend(obj_names[[0,2,3,4,5,1]])
     ax.set_ylim(0,47)
     ax.set_xlabel('Generation')
     ax.set_ylabel('Best objective')
     ax2 = ax.twinx()
-    ax2.plot(ug,bv[:,1], '-', color="#FB7AE1")
+    ax2.plot(ug,bv[:,[0,2,3,4,5]], '-')
+    ax2.plot(ug,bv[:,1], '-', color="#FB7AE1",zorder=0)
+    ax2.set_ylim(1300,1800)
+    ax2.legend(np.array(obj_names)[i_obj],framealpha=1,loc=1,ncols=2)
     fig.tight_layout()
     fig.savefig('obj_history.png', dpi=600, bbox_inches='tight')
     fig.show()
