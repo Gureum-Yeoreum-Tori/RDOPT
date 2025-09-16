@@ -1061,6 +1061,7 @@ def plot_unbalance_response_rated_speed_all(x_nodes, harmonic_resp, out_path, fi
         unb_ = unb.cases[0]
         unb_node = unb_.node[0]
         unb_mag = unb_.mag[0]
+        ax1.plot(x_nodes[unb_node],0,'-', linewidth=2, color='#FF0000')
         # ax2.quiver([x_nodes[unb_node], np.zeros_like(unb_node)], 
         #            [np.zeros_like(unb_mag), np.zeros_like(unb_mag)],
         #            [np.zeros_like(unb_mag),unb_mag])
@@ -1069,7 +1070,7 @@ def plot_unbalance_response_rated_speed_all(x_nodes, harmonic_resp, out_path, fi
         ax1.quiver([x_nodes[unb_node]], [0], [0], [-unb_mag], 
                     angles='xy',
                     pivot='tip',color='#FF0000',
-                    scale=scale)
+                    scale=scale,linewidth=0.5)
         labels.append('Unb.')
         # ax1.plot(x_nodes,-A_plot[ip],'-', linewidth=2, zorder=5)
         
@@ -1502,9 +1503,45 @@ _, _, _, _, _, _, _, _, _, _, _, harmonic_oper_sel= analyze_design(X, ctx, w_op)
 
 
 labels = ['Ini.','1','2','3']
-
-
-
 plot_unbalance_response_rated_speed_all(x_nodes, harmonic_resp=harmonic_oper_sel, out_path=f'opt_unb_shaft_all.png', figsize=figsize_SC_s, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals,ylim=25,labels=labels,unb=unb,scale=70000)
 
 
+
+
+import glob, re
+files = sorted(glob.glob('checkpoints/gen_*.npz'))
+gens, bests = [], []
+for f in files:
+    m = re.search(r"gen_(\d+)\.npz$", f)
+    gnum = int(m.group(1)) if m else None
+    with np.load(f) as nd:
+        if 'pop_F' in nd.files:
+            pop_F_signed = nd['pop_F'] * pareto_signs
+            best = np.min(pop_F_signed,axis=0)
+        elif 'opt_F' in nd.files:
+            pop_F_signed = nd['opt_F'] * pareto_signs
+            best = np.min(pop_F_signed,axis=0)
+        else:
+            continue
+    if gnum is None:
+        continue
+    gens.append(gnum)
+    bests.append(best)
+
+
+if gens:
+    order = np.argsort(gens)
+    ug = np.asarray(gens, dtype=int)[order]
+    bv = np.asarray(bests, dtype=float)[order]
+    fig, ax = plt.subplots(figsize=figsize_SC_ss)
+    ax.plot(ug, bv[:,[0,2,3,4,5]], '-', ms=3)
+    ax.plot(ug, bv[:,[1]], '-', color="#FB7AE1")
+    ax.legend(obj_names[[0,2,3,4,5,1]])
+    ax.set_ylim(0,47)
+    ax.set_xlabel('Generation')
+    ax.set_ylabel('Best objective')
+    ax2 = ax.twinx()
+    ax2.plot(ug,bv[:,1], '-', color="#FB7AE1")
+    fig.tight_layout()
+    fig.savefig('obj_history.png', dpi=600, bbox_inches='tight')
+    fig.show()
