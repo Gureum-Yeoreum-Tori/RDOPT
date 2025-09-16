@@ -1479,9 +1479,9 @@ sel = sel0[:5]
 sel = sel[[2,1,3]]
 # F_pareto[sel,:]
 
+plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel,figsize=figsize_SC_one_third_ss, xlim=[22,30], ylim=[1000,4000])
 pareto_plot_PCP(F=F_pareto_corrected, names=obj_names, idx=sel, figsize=figsize_SC_two_third_ss)
 pareto_plot_RAD(F=F_pareto_corrected, names=obj_names, idx=sel)
-plot_2factor(F_pop=F_pop,F_par=F_pareto_corrected,ip=[0, 1],idx=sel,figsize=figsize_SC_one_third_ss, xlim=[22,30], ylim=[1000,4000])
 
 
 
@@ -1574,53 +1574,53 @@ if gens:
 
 #%%
 
-dw = np.imag(eig_init).squeeze().T - w_vec
-plt.plot(w_vec,dw.T,'-o')
-plt.ylim(-100,100)
-plt.axhline(0,color='k')
+# dw = np.imag(eig_init).squeeze().T - w_vec
+# plt.plot(w_vec,dw.T,'-o')
+# plt.ylim(-100,100)
+# plt.axhline(0,color='k')
 
-def plot_modeshape(x_nodes, phi):
-    n_node = x_nodes.shape[0]
-    n_dof = n_node*4
-    x = phi[np.arange(0,n_dof,4)]
-    y = phi[np.arange(2,n_dof,4)]
+# def plot_modeshape(x_nodes, phi):
+#     n_node = x_nodes.shape[0]
+#     n_dof = n_node*4
+#     x = phi[np.arange(0,n_dof,4)]
+#     y = phi[np.arange(2,n_dof,4)]
 
-    t = np.linspace(0,2*np.pi,12)
-    qx = np.real(x.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
-    qy = np.real(y.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
+#     t = np.linspace(0,2*np.pi,12)
+#     qx = np.real(x.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
+#     qy = np.real(y.reshape(-1,1) * np.exp(1j*t.reshape(1,-1)))
     
-    qx = qx.reshape(n_node,-1)
-    qy = qy.reshape(n_node,-1)
+#     qx = qx.reshape(n_node,-1)
+#     qy = qy.reshape(n_node,-1)
     
-    q = np.sqrt(qx**2 + qy**2)
+#     q = np.sqrt(qx**2 + qy**2)
 
-    i_max = np.argmax(np.max(q,axis=1))
-    i_psi = np.argmax(q[i_max,:])
-    alpha = np.atan(qy[i_max, i_psi] / qx[i_max, i_psi])
+#     i_max = np.argmax(np.max(q,axis=1))
+#     i_psi = np.argmax(q[i_max,:])
+#     alpha = np.atan(qy[i_max, i_psi] / qx[i_max, i_psi])
 
-    # alpha=0
-    x_r = x * np.exp(1j * alpha)
-    y_r = y * np.exp(1j * alpha)
-    theta = 0.0
-    A_signed = np.real(x_r * np.cos(theta) + y_r * np.sin(theta))
+#     # alpha=0
+#     x_r = x * np.exp(1j * alpha)
+#     y_r = y * np.exp(1j * alpha)
+#     theta = 0.0
+#     A_signed = np.real(x_r * np.cos(theta) + y_r * np.sin(theta))
 
 
-    plt.plot(x_nodes,A_signed,'-o')
-    plt.tight_layout()
-    plt.show()
+#     plt.plot(x_nodes,A_signed,'-o')
+#     plt.tight_layout()
+#     plt.show()
     
-    return
+#     return
 
 
-phi = eigvecs_init[0,5,:,3]
-plot_modeshape(x_nodes=x_nodes,phi=phi)
+# phi = eigvecs_init[0,5,:,3]
+# plot_modeshape(x_nodes=x_nodes,phi=phi)
 
-for i in range(8):
-    phi = eigvecs_init[0,5,:,i]
-    print(f'mode: {i}')
-    plot_modeshape(x_nodes=x_nodes,phi=phi)
+# for i in range(8):
+#     phi = eigvecs_init[0,5,:,i]
+#     print(f'mode: {i}')
+#     plot_modeshape(x_nodes=x_nodes,phi=phi)
     
-eigve = np.expand_dims(eigvecs_init[:,5,:,3],axis=(1,3))
+# eigve = np.expand_dims(eigvecs_init[:,5,:,3],axis=(1,3))
 
 
-plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=eigve, out_path=f'modeshape.png', figsize=figsize_SC_s, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals,ylim=50000)
+# plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=eigve, out_path=f'modeshape.png', figsize=figsize_SC_s, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals,ylim=50000)
