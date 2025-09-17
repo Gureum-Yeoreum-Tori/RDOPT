@@ -104,9 +104,9 @@ bs_params = {
         'rho_seal': 850, # kg/m^3, seal fluid 
     }
 
-n_w = 11
+n_w = 8
 n_pop = 200
-n_max_gen = 400
+n_max_gen = 500
 
 ## Select algorithm
 
@@ -528,24 +528,32 @@ class RotordynamicProblem(Problem):
         idx_y = idx_x + 2
         Ux = harmonic[:, :, idx_x, 0]  # [pop, n_w, n_node]
         Uy = harmonic[:, :, idx_y, 0]
-        amp = np.sqrt(np.abs(Ux)**2 + np.abs(Uy)**2)  # [pop, n_w, n_node]
+        # amp = np.sqrt(np.abs(Ux)**2 + np.abs(Uy)**2)  # [pop, n_w, n_node]
+
+        xr = np.real(Ux)
+        xi = np.imag(Ux)
+        yr = np.real(Uy)
+        yi = np.imag(Uy)
+
+        amp = np.sqrt( (xr**2 + xi**2 +yr**2 + yi**2)/2 + np.sqrt((xr**2 - xi**2 +yr**2 - yi**2)**2/4 + (xr*xi + yr*yi)**2) )
+        b = np.sqrt( (xr**2 + xi**2 +yr**2 + yi**2)/2 - np.sqrt((xr**2 - xi**2 +yr**2 - yi**2)**2/4 + (xr*xi + yr*yi)**2) )
 
         brg_nodes = np.array([b.node for b in brgs], dtype=int)
         seal_nodes = np.array([s.node for s in seals], dtype=int)
         cal_nodes = np.unique(np.concatenate([brg_nodes, seal_nodes]))
         
-        Bx = np.stack([Ux.real, -Ux.imag], axis=-1)      # (..., 2)
-        By = np.stack([Uy.real, -Uy.imag], axis=-1)      # (..., 2)
-        B  = np.stack([Bx, By], axis=-2)                 # (..., 2, 2)
+        # Bx = np.stack([Ux.real, -Ux.imag], axis=-1)      # (..., 2)
+        # By = np.stack([Uy.real, -Uy.imag], axis=-1)      # (..., 2)
+        # B  = np.stack([Bx, By], axis=-2)                 # (..., 2, 2)
 
-        U, S, Vt = np.linalg.svd(B)                      # batched SVD
-        amp = S[..., 0]                                    # 진짜 최대 진폭 (장반경)
-        b_amp = S[..., 1]                                    # 최소 진폭 (단반경)
+        # U, S, Vt = np.linalg.svd(B)                      # batched SVD
+        # amp = S[..., 0]                                    # 진짜 최대 진폭 (장반경)
+        # b_amp = S[..., 1]                                    # 최소 진폭 (단반경)
 
-        # 장축 방향과 최대가 생기는 위상(원하면)
-        psi   = np.arctan2(U[..., 1, 0], U[..., 0, 0])   # 장축 각
-        tstar = np.arctan2(Vt[..., 0, 1], Vt[..., 0, 0]) # 피크 위상
-        alpha = -tstar
+        # # 장축 방향과 최대가 생기는 위상(원하면)
+        # psi   = np.arctan2(U[..., 1, 0], U[..., 0, 0])   # 장축 각
+        # tstar = np.arctan2(Vt[..., 0, 1], Vt[..., 0, 0]) # 피크 위상
+        # alpha = -tstar
 
         eps = 1e-18
         AF_max = np.zeros(pop, dtype=float)
