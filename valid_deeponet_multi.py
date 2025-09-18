@@ -9,6 +9,8 @@ import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader, random_split
 from sklearn.preprocessing import StandardScaler
 from torch.nn.utils import clip_grad_norm_
+import math
+
 
 # 1. Load dataset.mat files
 data_dir = 'dataset/data/tapered_seal'
@@ -41,8 +43,6 @@ hyperparams = {
 
 print(json.dumps(hyperparams, indent=2))
 
-#%%
-import math
 class EarlyStopping:
     def __init__(self, patience=100, minimize=True):
         self.best = math.inf if minimize else -math.inf

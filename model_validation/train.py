@@ -540,6 +540,18 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
             settings.baseline_alpha,
         )
         return {"checkpoint": "", "metrics": metrics, "best_val_loss": metrics["val"]["rmse"]}
+    
+    hyperparams = {
+        "Batch size": settings.batch_size,
+        "Parameter embedding dimension": settings.param_embedding_dim,
+        "# of hidden channels": settings.hidden_channels,
+        "# of layers": settings.n_layers,
+        "# of shared output channels": settings.param_embedding_dim,
+        "Learning rate": f"{settings.lr:.1e}",
+        "p_drop": settings.dropout,
+    }
+
+    print(json.dumps(hyperparams, indent=2))
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=settings.lr, weight_decay=settings.weight_decay)
     scheduler = build_scheduler(optimizer, settings.epochs, len(loaders["train"]), settings.warmup)
