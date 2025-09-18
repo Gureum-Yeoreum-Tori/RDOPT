@@ -22,16 +22,16 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 ROOT = Path(__file__).resolve().parent
 if __package__ is None or __package__ == "":
     sys.path.append(str(ROOT.parent))
-    from model_validation.models import MultiHeadDeepONet, MLP
+    from model_validation.models import MultiHeadDeepONet, MultiHeadMLP, MLP
 else:
-    from .models import MultiHeadDeepONet, MLP
+    from .models import MultiHeadDeepONet, MultiHeadMLP, MLP
 
 
 DEFAULT_MAT_FILES = (
     "20250908_T_182846",
-    "20250911_T_091324",
-    "20250908_T_183632",
-    "20250908_T_203220",
+    # "20250911_T_091324",
+    # "20250908_T_183632",
+    # "20250908_T_203220",
 )
 
 DEFAULTS = {
@@ -77,9 +77,11 @@ class TrainSettings:
     weight_decay: float = 0.0
     activation: str = "relu"
     hidden_layers: Sequence[int] = [64, 64, 64, 64]
+    branch_layers: Sequence[int] = [128, 128, 128, 128]
+    trunk_layers: Sequence[int] = [64, 64]
     param_embedding_dim: int = 64
     dropout: float = 0.0
-    n_basis: int = 64
+    n_basis: int = 32
     warmup: int = 0
     patience: int = 0
     grad_clip: float = 0.0
@@ -123,6 +125,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float)
     parser.add_argument("--weight-decay", type=float)
     parser.add_argument("--hidden-layers", nargs="*", type=int)   # 리스트로 받음
+    parser.add_argument("--branch-layers", nargs="*", type=int)
+    parser.add_argument("--trunk-layers", nargs="*", type=int)
     parser.add_argument("--param-embedding-dim", type=int)
     parser.add_argument("--dropout", type=float)
     parser.add_argument("--n-basis", type=int)
@@ -476,39 +480,59 @@ def build_settings(args: argparse.Namespace) -> TrainSettings:
     )
     return settings
 
-#TODO: 수정된 models.py에 맞춰서 model building, run training, evaluation, tuning 스크립트 수정해줘
-def build_model(settings: TrainSettings) -> nn.Module:
-    
+def build_model(
+    settings: TrainSettings,
+    input_dim: int,
+    output_dim: int,
+    *,
+    head_names: Optional[Sequence[str]] = None,
+    trunk_input_dim: Optional[int] = None,
+) -> nn.Module:
+    def _maybe_squeeze(tensor: Tensor) -> Tensor:
+        if tensor.ndim >= 3 and tensor.shape[-1] == 1:
+            return tensor.squeeze(-1)
+        return tensor
+
+    class _HeadStacker(nn.Module):
+        def __init__(self, base: nn.Module, names: Sequence[str]) -> None:
+            super().__init__()
+            self.base = base
+            self.names = list(names)
+
+        def forward(self, *inputs: Tensor, **kwargs: Tensor) -> Tensor:
+            outputs = self.base(*inputs, **kwargs)
+            if isinstance(outputs, dict):
+                stacked = torch.stack(
+                    [
+                        _maybe_squeeze(outputs[name])
+                        for name in self.names
+                    ],
+                    dim=1,
+                )
+                return stacked
+            return outputs
+
     set_seed(settings.seed)
     device = get_device(settings.device)
-
-    if settings.model == "mlp" and settings.target != "leak":
-        raise ValueError("MLP training supports the leak target only")
-    if settings.model == "deeponet" and settings.target != "rdc":
-        raise ValueError("DeepONet training supports the rdc target only")
-
     model_type = settings.model.lower()
-    
-    input_dim = model_cfg.get("input_dim") or train_dataset.features.shape[1]
-    output_dim = model_cfg.get("output_dim", len(target_names) or 1)
-    activation = model_cfg.get("activation", "relu")
-    hidden_layers = model_cfg.get("hidden_layers", [128, 128])
-    dropout = float(model_cfg.get("dropout", 0.0) or 0.0)
-    layernorm = bool(model_cfg.get("layernorm", False))
-    init = model_cfg.get("init", "xavier_uniform")
+    activation = settings.activation
+    hidden_layers = list(settings.hidden_layers) if settings.hidden_layers else [128, 128]
+    dropout = float(settings.dropout)
+    layernorm = bool(settings.layernorm)
 
     if model_type == "mlp":
-        model = MLP(
-            input_dim=input_dim,
-            output_dim=output_dim,
-            hidden_layers=hidden_layers,
-            activation=activation,
-            dropout=dropout,
-            layernorm=layernorm,
-        )
-    elif model_type == "multiheadmlp":
-        head_names = model_cfg.get("heads") or target_names
-        if len(head_names) <= 1:
+        if head_names and output_dim > 1:
+            base = MultiHeadMLP(
+                input_dim=input_dim,
+                hidden_layers=hidden_layers,
+                head_names=head_names,
+                head_dim=max(1, output_dim // max(1, len(head_names))),
+                activation=activation,
+                dropout=dropout,
+                layernorm=layernorm,
+            )
+            model: nn.Module = _HeadStacker(base, head_names)
+        else:
             model = MLP(
                 input_dim=input_dim,
                 output_dim=output_dim,
@@ -517,56 +541,30 @@ def build_model(settings: TrainSettings) -> nn.Module:
                 dropout=dropout,
                 layernorm=layernorm,
             )
-        else:
-            model = MultiHeadMLP(
-                input_dim=input_dim,
-                hidden_layers=hidden_layers,
-                head_names=head_names,
-                head_dim=model_cfg.get("head_dim", 1),
-                activation=activation,
-                dropout=dropout,
-                layernorm=layernorm,
-            )
     elif model_type == "deeponet":
-        deeponet_cfg = model_cfg.get("deeponet", {})
-        trunk_input_dim = (
-            train_dataset.w_grid.shape[-1]
-            if getattr(train_dataset, "w_grid", None) is not None
-            else deeponet_cfg.get("trunk_input_dim", 1)
-        )
-        if getattr(train_dataset, "w_grid", None) is None:
-            raise ValueError("DeepONet requires w_grid data")
-        model = DeepONet(
-            input_dim=input_dim,
-            output_dim=output_dim,
-            branch_layers=deeponet_cfg.get("branch_layers", [128, 128]),
-            trunk_layers=deeponet_cfg.get("trunk_layers", [128, 128]),
-            latent_dim=deeponet_cfg.get("latent_dim", 128),
-            activation=activation,
-            dropout=dropout,
-            trunk_input_dim=trunk_input_dim,
-        )
-    elif model_type == "multiheaddeeponet":
-        deeponet_cfg = model_cfg.get("deeponet", {})
-        head_names = model_cfg.get("heads") or target_names
-        if getattr(train_dataset, "w_grid", None) is None:
-            raise ValueError("MultiHeadDeepONet requires w_grid data")
-        trunk_input_dim = train_dataset.w_grid.shape[-1]
-        model = MultiHeadDeepONet(
+        if not head_names:
+            raise ValueError("DeepONet requires head_names to align outputs with targets")
+        if trunk_input_dim is None:
+            raise ValueError("DeepONet requires trunk_input_dim")
+        branch_layers = hidden_layers
+        trunk_layers = hidden_layers
+        latent_dim = settings.param_embedding_dim or settings.n_basis or hidden_layers[-1]
+        base = MultiHeadDeepONet(
             input_dim=input_dim,
             head_names=head_names,
-            branch_layers=deeponet_cfg.get("branch_layers", [128, 128]),
-            trunk_layers=deeponet_cfg.get("trunk_layers", [128, 128]),
-            latent_dim=deeponet_cfg.get("latent_dim", 128),
+            branch_layers=branch_layers,
+            trunk_layers=trunk_layers,
+            latent_dim=latent_dim,
             activation=activation,
             dropout=dropout,
             trunk_input_dim=trunk_input_dim,
         )
+        model = _HeadStacker(base, head_names)
     else:
-        raise ValueError(f"Unknown model type: {model_type}")
+        raise ValueError(f"Unknown model type: {settings.model}")
 
     model.to(device)
-    initialize_weights(model, init)
+    initialize_weights(model, settings.init)
     return model
 
 def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[str, Dict[str, float]]]]:
@@ -591,17 +589,17 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
         dataset = TensorDataset(tensor_X, tensor_Y)
         loaders = make_loaders(dataset, train_idx, val_idx, test_idx, settings.batch_size)
         criterion = nn.MSELoss()
-        model = MultiHeadDeepONet(
-            n_params=X.shape[1],
-            param_embedding_dim=settings.param_embedding_dim,
-            hidden_channels=settings.hidden_channels,
-            head_names=(),
-            n_heads=Y.shape[1],
-            n_layers=settings.n_layers,
-            n_basis=settings.n_basis,
-            p_drop=settings.dropout,
-        ).to(device)
+        head_names = tuple(settings.head_names) if settings.head_names else tuple(f"head_{idx}" for idx in range(Y.shape[1]))
+        if len(head_names) != Y.shape[1]:
+            raise ValueError("Number of head names must match RDC target dimension")
         grid_tensor = torch.from_numpy(grid_norm).to(device)
+        model = build_model(
+            settings,
+            input_dim=X.shape[1],
+            output_dim=Y.shape[1],
+            head_names=head_names,
+            trunk_input_dim=grid_tensor.shape[-1],
+        )
         grid_info = {
             "normalized": grid_norm.flatten().astype(float).tolist(),
             "original": grid_raw.flatten().astype(float).tolist(),
@@ -620,22 +618,11 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
         dataset = TensorDataset(tensor_X, tensor_y)
         loaders = make_loaders(dataset, train_idx, val_idx, test_idx, settings.batch_size)
         criterion = nn.MSELoss()
-        if settings.model == "mlp":
-            model = MLP(
-                in_dim=X.shape[1],
-                out_dim=y.shape[1],
-                hidden_channels=settings.hidden_channels,
-                n_layers=settings.n_layers,
-                p_drop=settings.dropout,
-            ).to(device)
-        else:
-            model = MLP(
-                in_dim=X.shape[1],
-                out_dim=y.shape[1],
-                hidden_channels=settings.hidden_channels,
-                n_layers=settings.n_layers,
-                p_drop=settings.dropout,
-            ).to(device)
+        model = build_model(
+            settings,
+            input_dim=X.shape[1],
+            output_dim=y.shape[1],
+        )
         grid_tensor = None
         grid_info = None
         scalers_serialized = {
