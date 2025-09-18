@@ -31,6 +31,8 @@ for mat_file in mat_files:
         lr=1e-4,
         weight_decay=1e-6,
         hidden_layers= [64, 64, 64, 64],
+        branch_layers= [128, 128, 128, 128],
+        trunk_layers= [64, 64],
         param_embedding_dim=64,
         dropout=0.0,
         n_basis=64,
@@ -44,9 +46,11 @@ for mat_file in mat_files:
         baseline_alpha=1.0,
     )
 
+
     def run(settings: Optional[TrainSettings] = None) -> dict:
         active = settings or BASE_TRAIN_SETTINGS
         return run_training(active)
+
 
     t0 = tt()
     result = run()

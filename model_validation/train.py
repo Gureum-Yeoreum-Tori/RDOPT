@@ -384,57 +384,6 @@ def serialize_scalers_list(scalers: Sequence[StandardScaler]) -> Dict[str, List[
     return {"mean": means, "scale": scales}
 
 
-# def run_baseline(features: np.ndarray, targets: np.ndarray, train_idx: np.ndarray, val_idx: np.ndarray, test_idx: np.ndarray, scalers_y: Union[Sequence[StandardScaler], StandardScaler], target: str, alpha: float) -> Dict[str, Dict[str, Dict[str, float]]]:
-#     X_train = features[train_idx]
-#     X_val = features[val_idx]
-#     X_test = features[test_idx]
-#     y_train = targets[train_idx]
-#     y_val = targets[val_idx]
-#     y_test = targets[test_idx]
-
-#     if target == "rdc":
-#         reshaped = y_train.reshape(y_train.shape[0], -1)
-#         model = MultiOutputRegressor(Ridge(alpha=alpha))
-#         model.fit(X_train, reshaped)
-#         pred_train = model.predict(X_train).reshape(y_train.shape)
-#         pred_val = model.predict(X_val).reshape(y_val.shape)
-#         pred_test = model.predict(X_test).reshape(y_test.shape)
-#         true_train = inverse_scale_rdc(y_train, scalers_y)
-#         true_val = inverse_scale_rdc(y_val, scalers_y)
-#         true_test = inverse_scale_rdc(y_test, scalers_y)
-#         pred_train_orig = inverse_scale_rdc(pred_train, scalers_y)
-#         pred_val_orig = inverse_scale_rdc(pred_val, scalers_y)
-#         pred_test_orig = inverse_scale_rdc(pred_test, scalers_y)
-#         metrics = {
-#             "train": compute_metrics(true_train, pred_train_orig),
-#             "val": compute_metrics(true_val, pred_val_orig),
-#             "test": compute_metrics(true_test, pred_test_orig),
-#         }
-#         metrics["per_head"] = {
-#             "train": compute_per_head_metrics(true_train, pred_train_orig),
-#             "val": compute_per_head_metrics(true_val, pred_val_orig),
-#             "test": compute_per_head_metrics(true_test, pred_test_orig),
-#         }
-#     else:
-#         ridge = Ridge(alpha=alpha)
-#         ridge.fit(X_train, y_train)
-#         pred_train = ridge.predict(X_train)
-#         pred_val = ridge.predict(X_val)
-#         pred_test = ridge.predict(X_test)
-#         true_train = inverse_scale_leak(y_train, scalers_y)
-#         true_val = inverse_scale_leak(y_val, scalers_y)
-#         true_test = inverse_scale_leak(y_test, scalers_y)
-#         pred_train_orig = inverse_scale_leak(pred_train, scalers_y)
-#         pred_val_orig = inverse_scale_leak(pred_val, scalers_y)
-#         pred_test_orig = inverse_scale_leak(pred_test, scalers_y)
-#         metrics = {
-#             "train": compute_metrics(true_train, pred_train_orig),
-#             "val": compute_metrics(true_val, pred_val_orig),
-#             "test": compute_metrics(true_test, pred_test_orig),
-#         }
-#     return metrics
-
-
 def save_checkpoint(path: Path, model: nn.Module, settings: TrainSettings, scalers: Dict[str, Union[Dict[str, List[float]], Dict[str, List[List[float]]]]], splits: Dict[str, List[int]], history: Dict[str, List[float]], metrics: Dict[str, Dict[str, float]], grid_info: Optional[Dict[str, List[float]]]) -> None:
     payload = {
         "model": settings.model,
@@ -452,33 +401,74 @@ def save_checkpoint(path: Path, model: nn.Module, settings: TrainSettings, scale
 
 
 def build_settings(args: argparse.Namespace) -> TrainSettings:
-    base = DEFAULTS[args.model]
+    base = DEFAULTS.get(args.model, {})
+
     settings = TrainSettings(
         model=args.model,
         target=args.target,
         data_dir=args.data_dir,
-        mat_files=tuple(args.mat_files) if args.mat_files else DEFAULT_MAT_FILES,
+        mat_files=tuple(args.mat_files) if args.mat_files else tuple(DEFAULT_MAT_FILES),
+
         leak_index=args.leak_index if args.leak_index is not None else 6,
         rdc_indices=tuple(args.rdc_indices) if args.rdc_indices else (2, 3, 4, 5),
-        batch_size=args.batch_size or base["batch_size"],
-        epochs=args.epochs or base["epochs"],
-        lr=args.lr or base["lr"],
-        weight_decay=args.weight_decay if args.weight_decay is not None else base["weight_decay"],
-        hidden_channels=args.hidden_channels or base["hidden_channels"],
-        param_embedding_dim=args.param_embedding or base["param_embedding_dim"],
-        n_layers=args.layers or base["n_layers"],
-        dropout=args.dropout if args.dropout is not None else base["dropout"],
-        n_basis=args.n_basis or base["n_basis"],
-        warmup=args.warmup if args.warmup is not None else base["warmup"],
-        patience=args.patience if args.patience is not None else base["patience"],
-        grad_clip=args.grad_clip if args.grad_clip is not None else base["grad_clip"],
-        seed=args.seed or 42,
-        device=args.device,
-        out_dir=args.out_dir or "net",
-        exp_name=args.exp_name,
-        baseline_alpha=args.baseline_alpha if args.baseline_alpha is not None else 1.0,
+
+        batch_size=args.batch_size or base.get("batch_size", 256),
+        epochs=args.epochs or base.get("epochs", 100),
+        lr=args.lr or base.get("lr", 1e-3),
+        weight_decay=args.weight_decay if args.weight_decay is not None else base.get("weight_decay", 0.0),
+
+        hidden_layers=tuple(args.hidden_layers) if args.hidden_layers else tuple(base.get("hidden_layers", [64,64,64,64])),
+        branch_layers=tuple(args.branch_layers) if args.branch_layers else tuple(base.get("branch_layers", [64,64,64])),
+        trunk_layers=tuple(args.trunk_layers) if args.trunk_layers else tuple(base.get("trunk_layers", [64,64,64])),
+
+        param_embedding_dim=args.param_embedding_dim or base.get("param_embedding_dim", 64),
+        dropout=args.dropout if args.dropout is not None else base.get("dropout", 0.0),
+        n_basis=args.n_basis or base.get("n_basis", 64),
+
+        warmup=args.warmup if args.warmup is not None else base.get("warmup", 0),
+        patience=args.patience if args.patience is not None else base.get("patience", 0),
+        grad_clip=args.grad_clip if args.grad_clip is not None else base.get("grad_clip", 0.0),
+
+        seed=args.seed or base.get("seed", 42),
+        device=args.device or base.get("device", None),
+        out_dir=args.out_dir or base.get("out_dir", "net"),
+        exp_name=args.exp_name or base.get("exp_name", None),
+
+        baseline_alpha=args.baseline_alpha if args.baseline_alpha is not None else base.get("baseline_alpha", 1.0),
+        head_names=tuple(args.head_names) if args.head_names else tuple(base.get("head_names", ("K","k","C","c"))),
     )
     return settings
+
+
+# def build_settings(args: argparse.Namespace) -> TrainSettings:
+#     base = DEFAULTS[args.model]
+#     settings = TrainSettings(
+#         model=args.model,
+#         target=args.target,
+#         data_dir=args.data_dir,
+#         mat_files=tuple(args.mat_files) if args.mat_files else DEFAULT_MAT_FILES,
+#         leak_index=args.leak_index if args.leak_index is not None else 6,
+#         rdc_indices=tuple(args.rdc_indices) if args.rdc_indices else (2, 3, 4, 5),
+#         batch_size=args.batch_size or base["batch_size"],
+#         epochs=args.epochs or base["epochs"],
+#         lr=args.lr or base["lr"],
+#         weight_decay=args.weight_decay if args.weight_decay is not None else base["weight_decay"],
+#         hidden_channels=args.hidden_channels or base["hidden_channels"],
+#         param_embedding_dim=args.param_embedding or base["param_embedding_dim"],
+#         n_layers=args.layers or base["n_layers"],
+#         dropout=args.dropout if args.dropout is not None else base["dropout"],
+#         n_basis=args.n_basis or base["n_basis"],
+#         warmup=args.warmup if args.warmup is not None else base["warmup"],
+#         patience=args.patience if args.patience is not None else base["patience"],
+#         grad_clip=args.grad_clip if args.grad_clip is not None else base["grad_clip"],
+#         seed=args.seed or 42,
+#         device=args.device,
+#         out_dir=args.out_dir or "net",
+#         exp_name=args.exp_name,
+#         baseline_alpha=args.baseline_alpha if args.baseline_alpha is not None else 1.0,
+#     )
+#     return settings
+
 
 def build_model(
     settings: TrainSettings,
@@ -570,12 +560,6 @@ def build_model(
 def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[str, Dict[str, float]]]]:
     set_seed(settings.seed)
     device = get_device(settings.device)
-
-    if settings.model == "mlp" and settings.target != "leak":
-        raise ValueError("MLP training supports the leak target only")
-    if settings.model == "deeponet" and settings.target != "rdc":
-        raise ValueError("DeepONet training supports the rdc target only")
-    
     
     
 
@@ -629,28 +613,22 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
             "X": serialize_scaler(scaler_X),
             "y": serialize_scaler(scaler_y),
         }
-
-    if settings.model == "baseline":
-        metrics = run_baseline(
-            tensor_X.numpy(),
-            tensor_Y.numpy() if settings.target == "rdc" else tensor_y.numpy(),
-            train_idx,
-            val_idx,
-            test_idx,
-            scalers_y if settings.target == "rdc" else scaler_y,
-            settings.target,
-            settings.baseline_alpha,
-        )
-        return {"checkpoint": "", "metrics": metrics, "best_val_loss": metrics["val"]["rmse"]}
     
     hyperparams = {
         "Batch size": settings.batch_size,
         "Parameter embedding dimension": settings.param_embedding_dim,
-        "# of hidden channels": settings.hidden_channels,
-        "# of layers": settings.n_layers,
+        "Hidden layers": settings.hidden_layers,
+        "Branch layers": settings.branch_layers,
+        "Trunk layers": settings.trunk_layers,
         "# of shared output channels": settings.param_embedding_dim,
         "Learning rate": f"{settings.lr:.1e}",
-        "p_drop": settings.dropout,
+        "Dropout": settings.dropout,
+        "Warmup steps": settings.warmup,
+        "Patience": settings.patience,
+        "Gradient clip": settings.grad_clip,
+        "Output basis (n_basis)": settings.n_basis,
+        "Head names": settings.head_names,
+        "Baseline alpha": settings.baseline_alpha,
     }
 
     print(json.dumps(hyperparams, indent=2))
