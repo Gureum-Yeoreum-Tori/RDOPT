@@ -1,12 +1,8 @@
-import json
-from dataclasses import replace
-from itertools import product
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Optional
 
-import numpy as np
-
-from model_validation.train import DEFAULTS, DEFAULT_MAT_FILES, TrainSettings, run_training
+from model_validation.train import DEFAULTS, DEFAULT_MAT_FILES, TrainSettings
+from model_validation.tune import make_pruner, make_sampler, run_optuna
 
 
 BASE_TUNE_SETTINGS = TrainSettings(
@@ -35,75 +31,42 @@ BASE_TUNE_SETTINGS = TrainSettings(
     baseline_alpha=1.0,
 )
 
-PARAM_GRID: Dict[str, Iterable] = {
-    "hidden_channels": [64, 128],
-    "param_embedding_dim": [64, 128],
-    "n_layers": [6, 8],
+PARAM_SPACE: Dict[str, Iterable] = {
+    "hidden_channels": [64, 96, 128],
+    "param_embedding_dim": [64, 96, 128],
+    "n_layers": [6, 7, 8],
     "n_basis": [64, 96],
-    "dropout": [0.0, 0.1],
-    "lr": [1e-4, 5e-5],
-    "weight_decay": [1e-6, 5e-6],
-    "batch_size": [256, 512],
-    "warmup": [250, 500],
-    "patience": [80, 120],
-    "grad_clip": [0.0, 1.0],
+    "dropout": [0.0, 0.05, 0.1],
+    "lr": [5e-5, 1e-4, 2e-4],
+    "weight_decay": [1e-6, 5e-6, 1e-5],
+    "batch_size": [256, 384, 512],
+    "warmup": [250, 500, 750],
+    "patience": [80, 100, 120],
+    "grad_clip": [0.0, 0.5, 1.0],
 }
 
-EXP_PREFIX = "deeponet_rdc_grid"
-MAX_TRIALS: Optional[int] = None
+SAMPLER_NAME = "tpe"
+PRUNER_NAME = "none"
+N_TRIALS: Optional[int] = 30
+TIMEOUT: Optional[float] = None
+EXP_PREFIX = "deeponet_rdc_optuna"
 JSON_LOG: Optional[Path] = None
-
-
-def cast_value(value):
-    if isinstance(value, (np.integer, np.floating)):
-        return value.item()
-    return value
-
-
-def run_grid(
-    settings: TrainSettings,
-    grid: Dict[str, Iterable],
-    max_trials: Optional[int] = None,
-    exp_prefix: Optional[str] = None,
-    json_log: Optional[Path] = None,
-) -> Tuple[List[Dict], Dict]:
-    if settings.model == "deeponet" and settings.target != "rdc":
-        raise ValueError("DeepONet tuning requires the rdc target")
-    if settings.model == "mlp" and settings.target != "leak":
-        raise ValueError("MLP tuning requires the leak target")
-    order = list(grid.keys())
-    results: List[Dict] = []
-    prefix = exp_prefix or f"{settings.model}_{settings.target}"
-    for trial_idx, values in enumerate(product(*(grid[key] for key in order)), start=1):
-        trial_params = dict(zip(order, values))
-        trial_settings = replace(settings, **trial_params)
-        trial_settings.exp_name = f"{prefix}_trial{trial_idx:03d}"
-        outcome = run_training(trial_settings)
-        val_rmse = outcome["metrics"]["val"]["rmse"]
-        record = {
-            "trial": trial_idx,
-            "params": {k: cast_value(v) for k, v in trial_params.items()},
-            "val_rmse": float(val_rmse),
-            "metrics": outcome["metrics"],
-            "checkpoint": outcome["checkpoint"],
-        }
-        results.append(record)
-        print(json.dumps(record))
-        if max_trials and trial_idx >= max_trials:
-            break
-    ranked = sorted(results, key=lambda item: item["val_rmse"]) if results else []
-    summary = {"results": results, "ranked": ranked}
-    print(json.dumps(summary, indent=2))
-    if json_log:
-        json_log.write_text(json.dumps(summary, indent=2))
-    return results, summary
+STUDY_NAME: Optional[str] = None
+STORAGE: Optional[str] = None
 
 
 if __name__ == "__main__":
-    run_grid(
-        settings=BASE_TUNE_SETTINGS,
-        grid=PARAM_GRID,
-        max_trials=MAX_TRIALS,
+    sampler = make_sampler(SAMPLER_NAME, BASE_TUNE_SETTINGS.seed)
+    pruner = make_pruner(PRUNER_NAME)
+    run_optuna(
+        base_settings=BASE_TUNE_SETTINGS,
+        search_space=PARAM_SPACE,
+        sampler=sampler,
+        pruner=pruner,
+        n_trials=N_TRIALS,
+        timeout=TIMEOUT,
+        study_name=STUDY_NAME,
+        storage=STORAGE,
         exp_prefix=EXP_PREFIX,
-        json_log=JSON_LOG,
+        json_log=str(JSON_LOG) if JSON_LOG else None,
     )
