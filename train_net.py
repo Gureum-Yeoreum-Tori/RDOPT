@@ -2,7 +2,7 @@
 import json
 from typing import Optional
 from model_validation.train import DEFAULT_MAT_FILES, TrainSettings, run_training
-
+from time import time as tt
 
 mat_files = (
     "20250908_T_182846",
@@ -10,6 +10,13 @@ mat_files = (
     "20250908_T_183632",
     "20250908_T_203220",
 )
+
+# MODEL_REGISTRY: Dict[str, nn.Module] = {
+#     "mlp": SimpleMLP,
+#     "multihead_mlp": MultiHeadMLP,
+#     "deeponet": MultiHeadDeepONet,
+#     "deeponet_single": DeepONet,
+# }
 
 for mat_file in mat_files:
     BASE_TRAIN_SETTINGS = TrainSettings(
@@ -29,7 +36,7 @@ for mat_file in mat_files:
         dropout=0.0,
         n_basis=64,
         warmup=500,
-        patience=0,
+        patience=1000,
         grad_clip=0.0,
         seed=42,
         device=None,
@@ -38,13 +45,22 @@ for mat_file in mat_files:
         baseline_alpha=1.0,
     )
 
-
     def run(settings: Optional[TrainSettings] = None) -> dict:
         active = settings or BASE_TRAIN_SETTINGS
         return run_training(active)
 
+    t0 = tt()
     result = run()
+    t1 = tt()
     print(json.dumps(result, indent=2))
+    print(f'DeepONet_multi training time= {t1-t0}\n')
+    
+    BASE_TRAIN_SETTINGS.model = "deeponet_single"
+    t0 = tt()
+    result = run()
+    t1 = tt()
+    print(json.dumps(result, indent=2))
+    print(f'training time= {t1-t0}\n')
 
 
 # %%

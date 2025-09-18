@@ -22,9 +22,9 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 ROOT = Path(__file__).resolve().parent
 if __package__ is None or __package__ == "":
     sys.path.append(str(ROOT.parent))
-    from model_validation.models import MultiHeadDeepONet, SimpleMLP
+    from model_validation.models import MultiHeadDeepONet, MLP
 else:
-    from .models import MultiHeadDeepONet, SimpleMLP
+    from .models import MultiHeadDeepONet, MLP
 
 
 DEFAULT_MAT_FILES = (
@@ -40,9 +40,8 @@ DEFAULTS = {
         "epochs": 5000,
         "lr": 1e-4,
         "weight_decay": 1e-6,
-        "hidden_channels": 64,
+        "hidden_layers": [64, 64, 64, 64, 64, 64, 64, 64],  # 8 layers
         "param_embedding_dim": 64,
-        "n_layers": 8,
         "dropout": 0.0,
         "n_basis": 64,
         "warmup": 500,
@@ -54,9 +53,8 @@ DEFAULTS = {
         "epochs": 3000,
         "lr": 1e-4,
         "weight_decay": 1e-6,
-        "hidden_channels": 64,
+        "hidden_layers": [64, 64, 64, 64],  # 4 layers
         "param_embedding_dim": 0,
-        "n_layers": 4,
         "dropout": 0.0,
         "n_basis": 0,
         "warmup": 0,
@@ -65,7 +63,6 @@ DEFAULTS = {
     },
 }
 
-
 @dataclass
 class TrainSettings:
     model: str
@@ -73,14 +70,14 @@ class TrainSettings:
     data_dir: str
     mat_files: Sequence[str]
     leak_index: int = 6
-    rdc_indices: Sequence[int] = (2, 3, 4, 5)
+    rdc_indices: Sequence[int] = (4, 5, 2, 3)
     batch_size: int = 256
     epochs: int = 100
     lr: float = 1e-3
     weight_decay: float = 0.0
-    hidden_channels: int = 64
+    activation: str = "relu"
+    hidden_layers: Sequence[int] = [64, 64, 64, 64]
     param_embedding_dim: int = 64
-    n_layers: int = 4
     dropout: float = 0.0
     n_basis: int = 64
     warmup: int = 0
@@ -88,9 +85,12 @@ class TrainSettings:
     grad_clip: float = 0.0
     seed: int = 42
     device: Optional[str] = None
-    out_dir: str = "net"
+    out_dir: str = "valid_net"
     exp_name: Optional[str] = None
     baseline_alpha: float = 1.0
+    init: str = "xavier_uniform"
+    layernorm: bool = False
+    head_names: Sequence[str] = ('K','k','C','c',)
 
 
 class EarlyStopping:
@@ -122,9 +122,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--lr", type=float)
     parser.add_argument("--weight-decay", type=float)
-    parser.add_argument("--hidden-channels", type=int)
-    parser.add_argument("--param-embedding", type=int)
-    parser.add_argument("--layers", type=int)
+    parser.add_argument("--hidden-layers", nargs="*", type=int)   # 리스트로 받음
+    parser.add_argument("--param-embedding-dim", type=int)
     parser.add_argument("--dropout", type=float)
     parser.add_argument("--n-basis", type=int)
     parser.add_argument("--leak-index", type=int)
@@ -137,6 +136,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir")
     parser.add_argument("--exp-name")
     parser.add_argument("--baseline-alpha", type=float)
+    parser.add_argument("--head-names", default=('K','k','C','c',))
     return parser.parse_args()
 
 
@@ -155,6 +155,25 @@ def get_device(spec: Optional[str]) -> torch.device:
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def initialize_weights(model: nn.Module, init: str) -> None:
+    init = init.lower()
+
+    def _init(m: nn.Module) -> None:
+        if isinstance(m, (nn.Linear, nn.Conv1d, nn.Conv2d)):
+            if init == "xavier_uniform":
+                nn.init.xavier_uniform_(m.weight)
+            elif init == "xavier_normal":
+                nn.init.xavier_normal_(m.weight)
+            elif init == "kaiming_uniform":
+                nn.init.kaiming_uniform_(m.weight, nonlinearity="relu")
+            elif init == "kaiming_normal":
+                nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+    model.apply(_init)
 
 
 def load_rdc(data_dir: str, mat_files: Sequence[str], rdc_indices: Sequence[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -361,55 +380,55 @@ def serialize_scalers_list(scalers: Sequence[StandardScaler]) -> Dict[str, List[
     return {"mean": means, "scale": scales}
 
 
-def run_baseline(features: np.ndarray, targets: np.ndarray, train_idx: np.ndarray, val_idx: np.ndarray, test_idx: np.ndarray, scalers_y: Union[Sequence[StandardScaler], StandardScaler], target: str, alpha: float) -> Dict[str, Dict[str, Dict[str, float]]]:
-    X_train = features[train_idx]
-    X_val = features[val_idx]
-    X_test = features[test_idx]
-    y_train = targets[train_idx]
-    y_val = targets[val_idx]
-    y_test = targets[test_idx]
+# def run_baseline(features: np.ndarray, targets: np.ndarray, train_idx: np.ndarray, val_idx: np.ndarray, test_idx: np.ndarray, scalers_y: Union[Sequence[StandardScaler], StandardScaler], target: str, alpha: float) -> Dict[str, Dict[str, Dict[str, float]]]:
+#     X_train = features[train_idx]
+#     X_val = features[val_idx]
+#     X_test = features[test_idx]
+#     y_train = targets[train_idx]
+#     y_val = targets[val_idx]
+#     y_test = targets[test_idx]
 
-    if target == "rdc":
-        reshaped = y_train.reshape(y_train.shape[0], -1)
-        model = MultiOutputRegressor(Ridge(alpha=alpha))
-        model.fit(X_train, reshaped)
-        pred_train = model.predict(X_train).reshape(y_train.shape)
-        pred_val = model.predict(X_val).reshape(y_val.shape)
-        pred_test = model.predict(X_test).reshape(y_test.shape)
-        true_train = inverse_scale_rdc(y_train, scalers_y)
-        true_val = inverse_scale_rdc(y_val, scalers_y)
-        true_test = inverse_scale_rdc(y_test, scalers_y)
-        pred_train_orig = inverse_scale_rdc(pred_train, scalers_y)
-        pred_val_orig = inverse_scale_rdc(pred_val, scalers_y)
-        pred_test_orig = inverse_scale_rdc(pred_test, scalers_y)
-        metrics = {
-            "train": compute_metrics(true_train, pred_train_orig),
-            "val": compute_metrics(true_val, pred_val_orig),
-            "test": compute_metrics(true_test, pred_test_orig),
-        }
-        metrics["per_head"] = {
-            "train": compute_per_head_metrics(true_train, pred_train_orig),
-            "val": compute_per_head_metrics(true_val, pred_val_orig),
-            "test": compute_per_head_metrics(true_test, pred_test_orig),
-        }
-    else:
-        ridge = Ridge(alpha=alpha)
-        ridge.fit(X_train, y_train)
-        pred_train = ridge.predict(X_train)
-        pred_val = ridge.predict(X_val)
-        pred_test = ridge.predict(X_test)
-        true_train = inverse_scale_leak(y_train, scalers_y)
-        true_val = inverse_scale_leak(y_val, scalers_y)
-        true_test = inverse_scale_leak(y_test, scalers_y)
-        pred_train_orig = inverse_scale_leak(pred_train, scalers_y)
-        pred_val_orig = inverse_scale_leak(pred_val, scalers_y)
-        pred_test_orig = inverse_scale_leak(pred_test, scalers_y)
-        metrics = {
-            "train": compute_metrics(true_train, pred_train_orig),
-            "val": compute_metrics(true_val, pred_val_orig),
-            "test": compute_metrics(true_test, pred_test_orig),
-        }
-    return metrics
+#     if target == "rdc":
+#         reshaped = y_train.reshape(y_train.shape[0], -1)
+#         model = MultiOutputRegressor(Ridge(alpha=alpha))
+#         model.fit(X_train, reshaped)
+#         pred_train = model.predict(X_train).reshape(y_train.shape)
+#         pred_val = model.predict(X_val).reshape(y_val.shape)
+#         pred_test = model.predict(X_test).reshape(y_test.shape)
+#         true_train = inverse_scale_rdc(y_train, scalers_y)
+#         true_val = inverse_scale_rdc(y_val, scalers_y)
+#         true_test = inverse_scale_rdc(y_test, scalers_y)
+#         pred_train_orig = inverse_scale_rdc(pred_train, scalers_y)
+#         pred_val_orig = inverse_scale_rdc(pred_val, scalers_y)
+#         pred_test_orig = inverse_scale_rdc(pred_test, scalers_y)
+#         metrics = {
+#             "train": compute_metrics(true_train, pred_train_orig),
+#             "val": compute_metrics(true_val, pred_val_orig),
+#             "test": compute_metrics(true_test, pred_test_orig),
+#         }
+#         metrics["per_head"] = {
+#             "train": compute_per_head_metrics(true_train, pred_train_orig),
+#             "val": compute_per_head_metrics(true_val, pred_val_orig),
+#             "test": compute_per_head_metrics(true_test, pred_test_orig),
+#         }
+#     else:
+#         ridge = Ridge(alpha=alpha)
+#         ridge.fit(X_train, y_train)
+#         pred_train = ridge.predict(X_train)
+#         pred_val = ridge.predict(X_val)
+#         pred_test = ridge.predict(X_test)
+#         true_train = inverse_scale_leak(y_train, scalers_y)
+#         true_val = inverse_scale_leak(y_val, scalers_y)
+#         true_test = inverse_scale_leak(y_test, scalers_y)
+#         pred_train_orig = inverse_scale_leak(pred_train, scalers_y)
+#         pred_val_orig = inverse_scale_leak(pred_val, scalers_y)
+#         pred_test_orig = inverse_scale_leak(pred_test, scalers_y)
+#         metrics = {
+#             "train": compute_metrics(true_train, pred_train_orig),
+#             "val": compute_metrics(true_val, pred_val_orig),
+#             "test": compute_metrics(true_test, pred_test_orig),
+#         }
+#     return metrics
 
 
 def save_checkpoint(path: Path, model: nn.Module, settings: TrainSettings, scalers: Dict[str, Union[Dict[str, List[float]], Dict[str, List[List[float]]]]], splits: Dict[str, List[int]], history: Dict[str, List[float]], metrics: Dict[str, Dict[str, float]], grid_info: Optional[Dict[str, List[float]]]) -> None:
@@ -457,6 +476,98 @@ def build_settings(args: argparse.Namespace) -> TrainSettings:
     )
     return settings
 
+#TODO: 수정된 models.py에 맞춰서 model building, run training, evaluation, tuning 스크립트 수정해줘
+def build_model(settings: TrainSettings) -> nn.Module:
+    
+    set_seed(settings.seed)
+    device = get_device(settings.device)
+
+    if settings.model == "mlp" and settings.target != "leak":
+        raise ValueError("MLP training supports the leak target only")
+    if settings.model == "deeponet" and settings.target != "rdc":
+        raise ValueError("DeepONet training supports the rdc target only")
+
+    model_type = settings.model.lower()
+    
+    input_dim = model_cfg.get("input_dim") or train_dataset.features.shape[1]
+    output_dim = model_cfg.get("output_dim", len(target_names) or 1)
+    activation = model_cfg.get("activation", "relu")
+    hidden_layers = model_cfg.get("hidden_layers", [128, 128])
+    dropout = float(model_cfg.get("dropout", 0.0) or 0.0)
+    layernorm = bool(model_cfg.get("layernorm", False))
+    init = model_cfg.get("init", "xavier_uniform")
+
+    if model_type == "mlp":
+        model = MLP(
+            input_dim=input_dim,
+            output_dim=output_dim,
+            hidden_layers=hidden_layers,
+            activation=activation,
+            dropout=dropout,
+            layernorm=layernorm,
+        )
+    elif model_type == "multiheadmlp":
+        head_names = model_cfg.get("heads") or target_names
+        if len(head_names) <= 1:
+            model = MLP(
+                input_dim=input_dim,
+                output_dim=output_dim,
+                hidden_layers=hidden_layers,
+                activation=activation,
+                dropout=dropout,
+                layernorm=layernorm,
+            )
+        else:
+            model = MultiHeadMLP(
+                input_dim=input_dim,
+                hidden_layers=hidden_layers,
+                head_names=head_names,
+                head_dim=model_cfg.get("head_dim", 1),
+                activation=activation,
+                dropout=dropout,
+                layernorm=layernorm,
+            )
+    elif model_type == "deeponet":
+        deeponet_cfg = model_cfg.get("deeponet", {})
+        trunk_input_dim = (
+            train_dataset.w_grid.shape[-1]
+            if getattr(train_dataset, "w_grid", None) is not None
+            else deeponet_cfg.get("trunk_input_dim", 1)
+        )
+        if getattr(train_dataset, "w_grid", None) is None:
+            raise ValueError("DeepONet requires w_grid data")
+        model = DeepONet(
+            input_dim=input_dim,
+            output_dim=output_dim,
+            branch_layers=deeponet_cfg.get("branch_layers", [128, 128]),
+            trunk_layers=deeponet_cfg.get("trunk_layers", [128, 128]),
+            latent_dim=deeponet_cfg.get("latent_dim", 128),
+            activation=activation,
+            dropout=dropout,
+            trunk_input_dim=trunk_input_dim,
+        )
+    elif model_type == "multiheaddeeponet":
+        deeponet_cfg = model_cfg.get("deeponet", {})
+        head_names = model_cfg.get("heads") or target_names
+        if getattr(train_dataset, "w_grid", None) is None:
+            raise ValueError("MultiHeadDeepONet requires w_grid data")
+        trunk_input_dim = train_dataset.w_grid.shape[-1]
+        model = MultiHeadDeepONet(
+            input_dim=input_dim,
+            head_names=head_names,
+            branch_layers=deeponet_cfg.get("branch_layers", [128, 128]),
+            trunk_layers=deeponet_cfg.get("trunk_layers", [128, 128]),
+            latent_dim=deeponet_cfg.get("latent_dim", 128),
+            activation=activation,
+            dropout=dropout,
+            trunk_input_dim=trunk_input_dim,
+        )
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+    model.to(device)
+    initialize_weights(model, init)
+    return model
 
 def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[str, Dict[str, float]]]]:
     set_seed(settings.seed)
@@ -466,6 +577,9 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
         raise ValueError("MLP training supports the leak target only")
     if settings.model == "deeponet" and settings.target != "rdc":
         raise ValueError("DeepONet training supports the rdc target only")
+    
+    
+    
 
     if settings.target == "rdc":
         X, Y, grid_norm, grid_raw = load_rdc(settings.data_dir, settings.mat_files, settings.rdc_indices)
@@ -481,6 +595,7 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
             n_params=X.shape[1],
             param_embedding_dim=settings.param_embedding_dim,
             hidden_channels=settings.hidden_channels,
+            head_names=(),
             n_heads=Y.shape[1],
             n_layers=settings.n_layers,
             n_basis=settings.n_basis,
@@ -506,7 +621,7 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
         loaders = make_loaders(dataset, train_idx, val_idx, test_idx, settings.batch_size)
         criterion = nn.MSELoss()
         if settings.model == "mlp":
-            model = SimpleMLP(
+            model = MLP(
                 in_dim=X.shape[1],
                 out_dim=y.shape[1],
                 hidden_channels=settings.hidden_channels,
@@ -514,7 +629,7 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
                 p_drop=settings.dropout,
             ).to(device)
         else:
-            model = SimpleMLP(
+            model = MLP(
                 in_dim=X.shape[1],
                 out_dim=y.shape[1],
                 hidden_channels=settings.hidden_channels,
