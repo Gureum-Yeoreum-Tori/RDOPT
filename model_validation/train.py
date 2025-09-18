@@ -4,7 +4,7 @@ import math
 import os
 import random
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
@@ -22,9 +22,9 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 ROOT = Path(__file__).resolve().parent
 if __package__ is None or __package__ == "":
     sys.path.append(str(ROOT.parent))
-    from model_validation.models import MultiHeadDeepONet, MultiHeadMLP, MLP
+    from model_validation.models import MultiHeadDeepONet, MultiHeadMLP, MLP, DeepONet
 else:
-    from .models import MultiHeadDeepONet, MultiHeadMLP, MLP
+    from .models import MultiHeadDeepONet, MultiHeadMLP, MLP, DeepONet
 
 
 DEFAULT_MAT_FILES = (
@@ -76,9 +76,11 @@ class TrainSettings:
     lr: float = 1e-3
     weight_decay: float = 0.0
     activation: str = "relu"
-    hidden_layers: Sequence[int] = [64, 64, 64, 64]
-    branch_layers: Sequence[int] = [128, 128, 128, 128]
-    trunk_layers: Sequence[int] = [64, 64]
+    hidden_layers: Sequence[int] = field(default_factory=lambda: [64, 64, 64, 64])
+    branch_layers: Sequence[int] = field(default_factory=lambda: [64, 64, 64])
+    trunk_layers: Sequence[int] = field(default_factory=lambda: [64, 64, 64])
+    rdc_indices: Sequence[int] = field(default_factory=lambda: (2, 3, 4, 5))
+    head_names: Optional[Sequence[str]] = None
     param_embedding_dim: int = 64
     dropout: float = 0.0
     n_basis: int = 32
@@ -92,7 +94,6 @@ class TrainSettings:
     baseline_alpha: float = 1.0
     init: str = "xavier_uniform"
     layernorm: bool = False
-    head_names: Sequence[str] = ('K','k','C','c',)
 
 
 class EarlyStopping:
@@ -140,7 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir")
     parser.add_argument("--exp-name")
     parser.add_argument("--baseline-alpha", type=float)
-    parser.add_argument("--head-names", default=('K','k','C','c',))
+    parser.add_argument("--head-names")
     return parser.parse_args()
 
 
@@ -506,12 +507,14 @@ def build_model(
     device = get_device(settings.device)
     model_type = settings.model.lower()
     activation = settings.activation
-    hidden_layers = list(settings.hidden_layers) if settings.hidden_layers else [128, 128]
+    # hidden_layers = list(settings.hidden_layers) if settings.hidden_layers else [128, 128]
+    hidden_layers = list(settings.hidden_layers)
     dropout = float(settings.dropout)
     layernorm = bool(settings.layernorm)
 
     if model_type == "mlp":
         if head_names and output_dim > 1:
+            model_spec = "multihead_mlp"
             base = MultiHeadMLP(
                 input_dim=input_dim,
                 hidden_layers=hidden_layers,
@@ -523,6 +526,7 @@ def build_model(
             )
             model: nn.Module = _HeadStacker(base, head_names)
         else:
+            model_spec = "mlp"
             model = MLP(
                 input_dim=input_dim,
                 output_dim=output_dim,
@@ -532,27 +536,44 @@ def build_model(
                 layernorm=layernorm,
             )
     elif model_type == "deeponet":
-        if not head_names:
-            raise ValueError("DeepONet requires head_names to align outputs with targets")
+        branch_layers = settings.branch_layers
+        trunk_layers = settings.trunk_layers
+        latent_dim = settings.n_basis
+        param_embedding_dim = settings.param_embedding_dim
+        
         if trunk_input_dim is None:
             raise ValueError("DeepONet requires trunk_input_dim")
-        branch_layers = hidden_layers
-        trunk_layers = hidden_layers
-        latent_dim = settings.param_embedding_dim or settings.n_basis or hidden_layers[-1]
-        base = MultiHeadDeepONet(
-            input_dim=input_dim,
-            head_names=head_names,
-            branch_layers=branch_layers,
-            trunk_layers=trunk_layers,
-            latent_dim=latent_dim,
-            activation=activation,
-            dropout=dropout,
-            trunk_input_dim=trunk_input_dim,
-        )
-        model = _HeadStacker(base, head_names)
+        if head_names is not None and output_dim > 1:
+            model_spec = "multihead_deeponet"
+            base = MultiHeadDeepONet(
+                input_dim=input_dim,
+                head_names=head_names,
+                branch_layers=branch_layers,
+                trunk_layers=trunk_layers,
+                param_embd_dim=param_embedding_dim,
+                latent_dim=latent_dim,
+                activation=activation,
+                dropout=dropout,
+                trunk_input_dim=trunk_input_dim,
+            )
+            model = _HeadStacker(base, head_names)
+        else:
+            model_spec = "deeponet"
+            model = DeepONet(
+                input_dim=input_dim,
+                branch_layers=branch_layers,
+                trunk_layers=trunk_layers,
+                param_embd_dim=param_embedding_dim,
+                output_dim=output_dim,
+                latent_dim=latent_dim,
+                activation=activation,
+                dropout=dropout,
+                trunk_input_dim=trunk_input_dim,
+            )
     else:
         raise ValueError(f"Unknown model type: {settings.model}")
 
+    print(model_spec)
     model.to(device)
     initialize_weights(model, settings.init)
     return model
@@ -560,8 +581,6 @@ def build_model(
 def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[str, Dict[str, float]]]]:
     set_seed(settings.seed)
     device = get_device(settings.device)
-    
-    
 
     if settings.target == "rdc":
         X, Y, grid_norm, grid_raw = load_rdc(settings.data_dir, settings.mat_files, settings.rdc_indices)
@@ -573,7 +592,8 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
         dataset = TensorDataset(tensor_X, tensor_Y)
         loaders = make_loaders(dataset, train_idx, val_idx, test_idx, settings.batch_size)
         criterion = nn.MSELoss()
-        head_names = tuple(settings.head_names) if settings.head_names else tuple(f"head_{idx}" for idx in range(Y.shape[1]))
+        # head_names = tuple(settings.head_names) if settings.head_names else tuple(f"head_{idx}" for idx in range(Y.shape[1]))
+        head_names = tuple(settings.head_names)
         if len(head_names) != Y.shape[1]:
             raise ValueError("Number of head names must match RDC target dimension")
         grid_tensor = torch.from_numpy(grid_norm).to(device)

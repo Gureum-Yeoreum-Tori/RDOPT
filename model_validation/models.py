@@ -33,7 +33,7 @@ class MLP(nn.Module):
         layernorm: bool = False,
     ) -> None:
         super().__init__()
-        body, last_dim = _build_body(
+        body, last_dim = _build_MLP(
             input_dim=input_dim,
             hidden_layers=hidden_layers,
             activation=activation,
@@ -68,7 +68,7 @@ class MultiHeadMLP(nn.Module):
         if not head_names:
             raise ValueError("head_names must be provided")
         self.head_names = list(head_names)
-        self.trunk, trunk_out = _build_body(
+        self.trunk, trunk_out = _build_MLP(
             input_dim=input_dim,
             hidden_layers=hidden_layers,
             activation=activation,
@@ -99,6 +99,7 @@ class DeepONet(nn.Module):
         self,
         input_dim: int,
         output_dim: int,
+        param_embd_dim: int,
         branch_layers: Sequence[int],
         trunk_layers: Sequence[int],
         latent_dim: int,
@@ -109,14 +110,15 @@ class DeepONet(nn.Module):
         super().__init__()
         self.output_dim = max(1, output_dim)
         self.latent_dim = latent_dim
-        self.branch = _build_stack(
+        self.branch = _build_operator_stack(
             input_dim=input_dim,
+            param_embd_dim= param_embd_dim,
             hidden_layers=branch_layers,
             output_dim=latent_dim * self.output_dim,
             activation=activation,
             dropout=dropout,
         )
-        self.trunk = _build_stack(
+        self.trunk = _build_operator_stack(
             input_dim=trunk_input_dim,
             hidden_layers=trunk_layers,
             output_dim=latent_dim,
@@ -153,6 +155,7 @@ class MultiHeadDeepONet(DeepONet):
         head_names: Sequence[str],
         branch_layers: Sequence[int],
         trunk_layers: Sequence[int],
+        param_embd_dim: int,
         latent_dim: int,
         activation: str = "gelu",
         dropout: float = 0.0,
@@ -166,6 +169,7 @@ class MultiHeadDeepONet(DeepONet):
             output_dim=len(self.head_names),
             branch_layers=branch_layers,
             trunk_layers=trunk_layers,
+            param_embd_dim=param_embd_dim,
             latent_dim=latent_dim,
             activation=activation,
             dropout=dropout,
@@ -181,15 +185,20 @@ class MultiHeadDeepONet(DeepONet):
         return outputs
 
 
-def _build_stack(
+def _build_operator_stack(
     input_dim: int,
     hidden_layers: Sequence[int],
     output_dim: int,
     activation: str,
     dropout: float,
+    param_embd_dim: Optional[int] = None,
 ) -> nn.Sequential:
     layers: List[nn.Module] = []
     prev = input_dim
+    if param_embd_dim is not None:
+        layers.append(nn.Linear(prev, param_embd_dim))
+        prev = param_embd_dim
+        
     for width in hidden_layers:
         layers.append(nn.Linear(prev, width))
         layers.append(_make_activation(activation))
@@ -200,7 +209,7 @@ def _build_stack(
     return nn.Sequential(*layers)
 
 
-def _build_body(
+def _build_MLP(
     input_dim: int,
     hidden_layers: Sequence[int],
     activation: str,

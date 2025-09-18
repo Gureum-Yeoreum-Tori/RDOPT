@@ -18,8 +18,8 @@ mat_files = (
 #     "deeponet_single": DeepONet,
 # }
 
-for mat_file in mat_files:
-    BASE_TRAIN_SETTINGS = TrainSettings(
+for i, mat_file in enumerate(mat_files):
+    settings = TrainSettings(
         model="deeponet",
         target="rdc",
         data_dir="dataset/data/tapered_seal",
@@ -27,7 +27,7 @@ for mat_file in mat_files:
         leak_index=6,
         rdc_indices=(4, 5, 2, 3),
         batch_size=512,
-        epochs=5000,
+        epochs=1000,
         lr=1e-4,
         weight_decay=1e-6,
         hidden_layers= [64, 64, 64, 64],
@@ -42,25 +42,22 @@ for mat_file in mat_files:
         seed=42,
         device=None,
         out_dir="net",
-        exp_name="deeponet_rdc_manual",
+        exp_name=f"deeponet_{i}",
         baseline_alpha=1.0,
+        head_names=None,
     )
 
 
-    def run(settings: Optional[TrainSettings] = None) -> dict:
-        active = settings or BASE_TRAIN_SETTINGS
-        return run_training(active)
-
-
     t0 = tt()
-    result = run()
+    result = run_training(settings)
     t1 = tt()
     print(json.dumps(result, indent=2))
     print(f'DeepONet_multi training time= {t1-t0}\n')
     
-    BASE_TRAIN_SETTINGS.model = "deeponet_single"
+    settings2 = settings
+    settings2.head_names=('K','k','C','c',)
     t0 = tt()
-    result = run()
+    result = run_training(settings2)
     t1 = tt()
     print(json.dumps(result, indent=2))
     print(f'training time= {t1-t0}\n')
