@@ -18,6 +18,7 @@ from make_paper_figures import (
     figsize_DC,
     figsize_DC_b,
 )
+
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
 
@@ -343,8 +344,16 @@ for i_rdc in range(4):
     rmse = np.sqrt(mean_squared_error(y_true_, y_pred_))
     mae  = mean_absolute_error(y_true_, y_pred_)
     r2   = r2_score(y_true_, y_pred_)
+    
+    n = len(y_true_)
+    num = np.sum(np.square(y_true_ - y_pred_)) / n  # update
+    den = np.sum(np.square(y_pred_))
+    squared_error = num/den
+    rrmse = np.sqrt(squared_error)
+    
+    
     yrng = (y_true_.max() - y_true_.min())
-    rrmse = rmse / (yrng + 1e-12)
+    # rrmse = rmse / (yrng + 1e-12)
     mape = np.mean(np.abs((y_true_ - y_pred_) / (np.abs(y_true_) + 1e-12)))
     
     txt = '\n'.join([

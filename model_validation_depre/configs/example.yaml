@@ -1,0 +1,58 @@
+experiment: leak_dyncoeff_compare
+seed: 42
+logging:
+  save_dir: runs
+data:
+  path_csv: null
+  path_h5: dataset/data/20250908_T_182846.parquet
+  # path_h5: dataset/data/20250908_T_091324.parquet
+  # path_h5: dataset/data/20250908_T_183632.parquet
+  # path_h5: dataset/data/20250908_T_203220.parquet
+  table: seals
+  features: [param_0, param_1, param_2, param_3]
+  targets: [RDC]
+  id_column: id
+  w_column: w_vec
+  kfold: 0
+  val_size: 0.15
+  test_size: 0.15
+  scaler: standard
+  expand_w: true
+training:
+  model: MLP
+  epochs: 500
+  batch_size: 512
+  optimizer: AdamW
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  scheduler: cosine
+  loss: mse
+  grad_clip: 1.0
+  mixed_precision: true
+  early_stopping:
+    patience: 50
+    min_delta: 0.0
+model:
+  input_dim: 4
+  output_dim: 1
+  hidden_layers: [256, 256, 128]
+  activation: gelu
+  dropout: 0.1
+  layernorm: false
+  init: xavier_uniform
+  deeponet:
+    branch_layers: [256, 256]
+    trunk_layers: [256, 256]
+    latent_dim: 128
+  heads: [K, k, C, c]
+metrics:
+  primary: r2
+  report: [rmse, mae, mape, r2]
+baselines:
+  run: true
+  knn_k: 5
+  linear: true
+  ridge_alpha: 1.0
+  random_forest: true
+  interpolation: true
+  rf_estimators: 300
