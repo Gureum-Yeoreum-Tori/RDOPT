@@ -1,9 +1,6 @@
 #%%
-import model_validation.models as models
-import model_validation.tune as tune
 import json
 from typing import Optional
-
 from model_validation.train import DEFAULT_MAT_FILES, TrainSettings, run_training
 
 BASE_TRAIN_SETTINGS = TrainSettings(

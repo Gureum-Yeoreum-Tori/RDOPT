@@ -553,6 +553,8 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
         val_loss = eval_epoch(model, loaders["val"], device, criterion, grid_tensor)
         history["train"].append(train_loss)
         history["val"].append(val_loss)
+        if (epoch+1) % 100 == 0:
+            print(f'Epoch {epoch+1}/{settings.epochs}, Train {train_loss:.6f}, Val {val_loss:.6f}')
         if val_loss < best_val:
             best_val = val_loss
         if early is not None:
