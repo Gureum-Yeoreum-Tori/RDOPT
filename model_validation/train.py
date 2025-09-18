@@ -611,7 +611,7 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
             if len(head_names) != Y.shape[1]:
                 raise ValueError("Number of head names must match RDC target dimension")
         else:
-            head_names = tuple(f"head_{idx}" for idx in range(Y.shape[1]))
+            head_names = None
         grid_tensor = torch.from_numpy(grid_norm).to(device)
         model = build_model(
             settings,

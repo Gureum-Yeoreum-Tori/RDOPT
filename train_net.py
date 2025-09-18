@@ -44,7 +44,6 @@ for i, mat_file in enumerate(mat_files):
         out_dir="net",
         exp_name=f"deeponet_{i}",
         baseline_alpha=1.0,
-        head_names=None,
     )
 
 
