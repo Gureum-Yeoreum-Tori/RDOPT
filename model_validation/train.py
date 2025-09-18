@@ -366,12 +366,26 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     return {"rmse": float(rmse), "mae": float(mae), "r2": float(r2), "rrmse": float(rrmse)}
 
 
-def compute_per_head_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Dict[str, float]]:
-    per_head: Dict[str, Dict[str, float]] = {}
+def compute_per_head_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    head_names: Optional[Sequence[str]] = None,
+) -> Dict[str, Dict[str, float]]:
     n_heads = y_true.shape[1]
-    for head in range(n_heads):
-        metrics = compute_metrics(y_true[:, head, :][:, :, None], y_pred[:, head, :][:, :, None])
-        per_head[f"head_{head}"] = metrics
+    if head_names is not None:
+        if len(head_names) != n_heads:
+            raise ValueError("Number of head names must match number of heads")
+        names = list(head_names)
+    else:
+        names = [f"head_{idx}" for idx in range(n_heads)]
+
+    per_head: Dict[str, Dict[str, float]] = {}
+    for head, name in enumerate(names):
+        metrics = compute_metrics(
+            y_true[:, head, :][:, :, None],
+            y_pred[:, head, :][:, :, None],
+        )
+        per_head[name] = metrics
     return per_head
 
 
@@ -592,10 +606,12 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
         dataset = TensorDataset(tensor_X, tensor_Y)
         loaders = make_loaders(dataset, train_idx, val_idx, test_idx, settings.batch_size)
         criterion = nn.MSELoss()
-        # head_names = tuple(settings.head_names) if settings.head_names else tuple(f"head_{idx}" for idx in range(Y.shape[1]))
-        head_names = tuple(settings.head_names)
-        if len(head_names) != Y.shape[1]:
-            raise ValueError("Number of head names must match RDC target dimension")
+        if settings.head_names:
+            head_names = tuple(settings.head_names)
+            if len(head_names) != Y.shape[1]:
+                raise ValueError("Number of head names must match RDC target dimension")
+        else:
+            head_names = tuple(f"head_{idx}" for idx in range(Y.shape[1]))
         grid_tensor = torch.from_numpy(grid_norm).to(device)
         model = build_model(
             settings,
@@ -696,9 +712,9 @@ def run_training(settings: TrainSettings) -> Dict[str, Union[float, str, Dict[st
         val_pred = inverse_scale_rdc(val_preds, scalers_y)
         test_pred = inverse_scale_rdc(test_preds, scalers_y)
         per_head = {
-            "train": compute_per_head_metrics(train_true, train_pred),
-            "val": compute_per_head_metrics(val_true, val_pred),
-            "test": compute_per_head_metrics(test_true, test_pred),
+            "train": compute_per_head_metrics(train_true, train_pred, head_names),
+            "val": compute_per_head_metrics(val_true, val_pred, head_names),
+            "test": compute_per_head_metrics(test_true, test_pred, head_names),
         }
     else:
         y_train = tensor_y[train_idx].numpy()
