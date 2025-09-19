@@ -56,7 +56,7 @@ for i, mat_file in enumerate(mat_files):
     
     settings2 = settings
     settings2.head_names=[]
-    exp_name=f"deeponet_{i}",
+    settings2.exp_name=f"deeponet_{i}"
     t0 = tt()
     result = run_training(settings2)
     t1 = tt()
