@@ -15,16 +15,25 @@ from optuna.trial import TrialState
 
 from model_validation.train import TrainSettings, run_training
 
+import shutil
+from datetime import datetime
+
 # Dataset configuration
 DATA_DIR = "dataset/data/tapered_seal"
-MAT_FILES = ("20250908_T_203220",)
+MAT_FILES = (
+    # "20250908_T_182846",
+    # "20250911_T_091324",
+    # "20250908_T_183632",
+    "20250908_T_203220",
+)
 TARGET = "rdc"
 
 # Optuna configuration
 OPTUNA_SEED = 42
 OUTPUT_DIR = Path("net") / "optuna"
 SUMMARY_PATH = OUTPUT_DIR / "best_trials.json"
-N_TRIALS: Dict[str, int] = {"mlp": 20, "deeponet": 30}
+# N_TRIALS: Dict[str, int] = {"mlp": 20, "deeponet": 30}
+N_TRIALS: Dict[str, int] = {"deeponet": 50}
 
 # Search spaces
 MLP_WIDTH_CHOICES = [64, 96, 128, 192, 256, 320, 384, 512]
@@ -163,6 +172,65 @@ def create_study(model_type: str) -> optuna.Study:
     return optuna.create_study(direction="minimize", study_name=f"{model_type}_optuna", sampler=sampler)
 
 
+# def save_summary(studies: Dict[str, optuna.Study]) -> None:
+#     if not studies:
+#         return
+#     summary = {}
+#     for model_type, study in studies.items():
+#         completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
+#         if not completed:
+#             continue
+#         best = min(completed, key=lambda t: t.value)
+#         summary[model_type] = {
+#             "best_value": float(best.value),
+#             "best_params": best.params,
+#             "user_attrs": best.user_attrs,
+#         }
+#     if not summary:
+#         return
+#     SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+#     SUMMARY_PATH.write_text(json.dumps(summary, indent=2))
+
+
+def save_best_artifact(study: optuna.Study, model_type: str, out_root: Path) -> None:
+    """study에서 best trial을 골라 체크포인트를 별도 폴더에 복사하고, 메타데이터를 JSON으로 저장."""
+    completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
+    if not completed:
+        print(f"[{model_type}] No completed trials; skip saving best artifact.")
+        return
+
+    best = min(completed, key=lambda t: t.value)
+    ckpt_src = best.user_attrs.get("checkpoint")
+    if not ckpt_src:
+        print(f"[{model_type}] Best trial has no 'checkpoint' in user_attrs; skip.")
+        return
+
+    best_dir = out_root / model_type / "best"
+    best_dir.mkdir(parents=True, exist_ok=True)
+
+    # 파일명에 시간/값/트라이얼 번호를 반영해 가독성 확보
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ext = Path(ckpt_src).suffix or ".pt"
+    ckpt_dst = best_dir / f"best_{model_type}_trial{best.number:03d}_rmse{best.value:.6f}_{stamp}{ext}"
+
+    try:
+        shutil.copyfile(ckpt_src, ckpt_dst)
+    except FileNotFoundError:
+        print(f"[{model_type}] checkpoint not found: {ckpt_src}")
+        return
+
+    meta = {
+        "model_type": model_type,
+        "trial_number": best.number,
+        "best_value": float(best.value),
+        "best_params": best.params,
+        "user_attrs": best.user_attrs,
+        "checkpoint_copied_to": str(ckpt_dst),
+        "timestamp": stamp,
+    }
+    (best_dir / "best_meta.json").write_text(json.dumps(meta, indent=2))
+    print(f"[{model_type}] Best RMSE={best.value:.6f} (trial {best.number}) -> {ckpt_dst}")
+
 def save_summary(studies: Dict[str, optuna.Study]) -> None:
     if not studies:
         return
@@ -176,12 +244,13 @@ def save_summary(studies: Dict[str, optuna.Study]) -> None:
             "best_value": float(best.value),
             "best_params": best.params,
             "user_attrs": best.user_attrs,
+            "best_trial_number": best.number,
         }
     if not summary:
         return
     SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2))
-
+    print(f"Wrote summary -> {SUMMARY_PATH}")
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -192,20 +261,51 @@ def main() -> None:
         n_trials = N_TRIALS.get(model_type, 0)
         if n_trials <= 0:
             continue
-        print(f"Starting Optuna study for {model_type} ({n_trials} trials)")
+
+        print(f"[{model_type}] Start Optuna ({n_trials} trials)")
         study = create_study(model_type)
         objective = make_objective(model_type)
         study.optimize(objective, n_trials=n_trials)
+
+        # 완료 여부 및 best 출력
         completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
         if not completed:
-            print(f"No completed trials for {model_type}; all trials failed or were pruned.")
+            print(f"[{model_type}] No completed trials; all failed or pruned.")
         else:
             best = min(completed, key=lambda t: t.value)
-            print(f"Best {model_type} RMSE: {best.value:.6f}")
-            # print(json.dumps(best.params, indent=2))
+            print(f"[{model_type}] Best RMSE={best.value:.6f} (trial {best.number})")
+
+            # 여기서 바로 best 체크포인트 별도 저장
+            save_best_artifact(study, model_type, OUTPUT_DIR)
+
         studies[model_type] = study
 
     save_summary(studies)
+    
+    
+# def main() -> None:
+#     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+#     optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+#     studies: Dict[str, optuna.Study] = {}
+#     for model_type in ("mlp", "deeponet"):
+#         n_trials = N_TRIALS.get(model_type, 0)
+#         if n_trials <= 0:
+#             continue
+#         print(f"Starting Optuna study for {model_type} ({n_trials} trials)")
+#         study = create_study(model_type)
+#         objective = make_objective(model_type)
+#         study.optimize(objective, n_trials=n_trials)
+#         completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
+#         if not completed:
+#             print(f"No completed trials for {model_type}; all trials failed or were pruned.")
+#         else:
+#             best = min(completed, key=lambda t: t.value)
+#             print(f"Best {model_type} RMSE: {best.value:.6f}")
+#             # print(json.dumps(best.params, indent=2))
+#         studies[model_type] = study
+
+#     save_summary(studies)
 
 
 if __name__ == "__main__":
