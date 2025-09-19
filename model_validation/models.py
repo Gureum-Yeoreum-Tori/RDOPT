@@ -140,7 +140,8 @@ class DeepONet(nn.Module):
         branch_exp = branch_out.unsqueeze(2)
         trunk_exp = trunk_features.unsqueeze(1)
         values = torch.sum(branch_exp * trunk_exp, dim=-1)
-        return values.transpose(1, 2)
+        # return values.transpose(1, 2)
+        return values
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(params={count_parameters(self)})"
@@ -175,11 +176,40 @@ class MultiHeadDeepONet(DeepONet):
             dropout=dropout,
             trunk_input_dim=trunk_input_dim,
         )
+        self.head_scales = nn.Parameter(torch.ones(len(self.head_names), self.latent_dim))
+        self.head_bias = nn.Parameter(torch.zeros(len(self.head_names)))
 
     def forward(self, branch_input: Tensor, trunk_input: Tensor) -> Dict[str, Tensor]:
+        B, W, wdim = trunk_input.shape
+        
+        # branch: (B, O*d) -> (B,O,d)
+        b = self.branch(branch_input).view(B, len(self.head_names), self.latent_dim)
+        # trunk: (B,W,wdim)->(B*W,wdim)->(B,W,d)
+        t = self.trunk(trunk_input.reshape(B*W, wdim)).view(B, W, self.latent_dim)
+        # scale per head: (B,O,d) * (O,d) -> (B,O,d)
+        b = b * self.head_scales.unsqueeze(0)
+        # inner product along d: (B,O,1,d)*(B,1,W,d)
+        y = (b.unsqueeze(2) * t.unsqueeze(1)).sum(dim=-1)  # (B,O,W)
+        y = y + self.head_bias.view(1, -1, 1)
+        return {name: y[:, i:i+1, :] for i, name in enumerate(self.head_names)}
+
+        # branch_out = self.branch(branch_input).view(B, self.output_dim, self.latent_dim)         # (B,O,d)
+        # trunk_feat = self.trunk(trunk_input.reshape(B*W, wdim)).view(B, W, self.latent_dim)      # (B,W,d)
+
+        # trunk_exp = trunk_feat.unsqueeze(1)                       # (B,1,W,d)
+        # # 헤드별 스케일 적용
+        # scaled = branch_out * self.head_scales.unsqueeze(0)       # (B,O,d)
+        # values = torch.sum(scaled.unsqueeze(2) * trunk_exp, dim=-1)  # (B,O,W)
+        # if hasattr(self, "head_bias"):
+        #     values = values + self.head_bias.view(1, -1, 1)
+
+        return {name: values[:, i:i+1, :] for i, name in enumerate(self.head_names)}
+
+    def forward_(self, branch_input: Tensor, trunk_input: Tensor) -> Dict[str, Tensor]:
         values = super().forward(branch_input, trunk_input)
         outputs = {
-            name: values[..., idx : idx + 1]
+            # name: values[..., idx : idx + 1]
+            name: values[:, idx : idx + 1, :]
             for idx, name in enumerate(self.head_names)
         }
         return outputs

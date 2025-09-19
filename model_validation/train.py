@@ -514,6 +514,7 @@ def build_model(
                     ],
                     dim=1,
                 )
+                stacked=stacked.squeeze()
                 return stacked
             return outputs
 

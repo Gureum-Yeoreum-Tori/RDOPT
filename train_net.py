@@ -44,6 +44,7 @@ for i, mat_file in enumerate(mat_files):
         out_dir="net",
         exp_name=f"deeponet_{i}",
         baseline_alpha=1.0,
+        head_names=('K','k','C','c',)
     )
 
 
@@ -54,7 +55,7 @@ for i, mat_file in enumerate(mat_files):
     print(f'DeepONet_multi training time= {t1-t0}\n')
     
     settings2 = settings
-    settings2.head_names=('K','k','C','c',)
+    settings2.head_names=[]
     t0 = tt()
     result = run_training(settings2)
     t1 = tt()
