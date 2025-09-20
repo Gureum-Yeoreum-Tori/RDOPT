@@ -37,8 +37,8 @@ N_TRIALS: Dict[str, int] = {"deeponet": 50}
 
 # Search spaces
 MLP_WIDTH_CHOICES = [64, 96, 128, 192, 256, 320, 384, 512]
-DEEPONET_BRANCH_CHOICES = [64, 96, 128, 160, 192, 224, 256, 320]
-DEEPONET_TRUNK_CHOICES = [32, 48, 64, 80, 96, 112, 128, 160]
+DEEPONET_BRANCH_CHOICES = [64, 96, 128, 160, 192, 224, 256]
+DEEPONET_TRUNK_CHOICES = [32, 48, 64, 80, 96, 112, 128]
 
 
 def create_base_settings(model_type: str) -> TrainSettings:
@@ -58,7 +58,7 @@ def create_base_settings(model_type: str) -> TrainSettings:
         return TrainSettings(
             model="mlp",
             batch_size=256,
-            epochs=600,
+            epochs=3000,
             lr=1e-4,
             weight_decay=1e-6,
             activation="relu",
@@ -75,7 +75,7 @@ def create_base_settings(model_type: str) -> TrainSettings:
         return TrainSettings(
             model="deeponet",
             batch_size=512,
-            epochs=1500,
+            epochs=5000,
             lr=1e-4,
             weight_decay=1e-6,
             activation="gelu",
@@ -129,11 +129,11 @@ def build_deeponet_settings(trial: Trial) -> TrainSettings:
     settings.activation = trial.suggest_categorical("deeponet_activation", ["relu", "gelu"])
     settings.lr = trial.suggest_float("deeponet_lr", 1e-6, 1e-4, log=True)
     settings.weight_decay = trial.suggest_float("deeponet_weight_decay", 1e-6, 1e-4, log=True)
-    settings.batch_size = trial.suggest_categorical("deeponet_batch_size", [256, 512, 1024])
+    # settings.batch_size = trial.suggest_categorical("deeponet_batch_size", [256, 512, 1024])
     # settings.grad_clip = trial.suggest_categorical("deeponet_grad_clip", [0.0, 0.5, 1.0])
     # settings.warmup = trial.suggest_categorical("deeponet_warmup", [0, 200, 400, 600, 800])
     # settings.patience = trial.suggest_int("deeponet_patience", 150, 400, step=50)
-    settings.epochs = trial.suggest_int("deeponet_epochs", 1000, 5000, step=500)
+    # settings.epochs = trial.suggest_int("deeponet_epochs", 1000, 5000, step=500)
     settings.exp_name = f"deeponet_optuna_trial{trial.number:03d}"
     settings.out_dir = str(OUTPUT_DIR / "deeponet")
     return settings
@@ -211,7 +211,7 @@ def save_best_artifact(study: optuna.Study, model_type: str, out_root: Path) -> 
     # 파일명에 시간/값/트라이얼 번호를 반영해 가독성 확보
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ext = Path(ckpt_src).suffix or ".pt"
-    ckpt_dst = best_dir / f"best_{model_type}_trial{best.number:03d}_rmse{best.value:.6f}_{stamp}{ext}"
+    ckpt_dst = best_dir / f"best_{model_type}_trial{best.number:03d}_{stamp}{ext}"
 
     try:
         shutil.copyfile(ckpt_src, ckpt_dst)
