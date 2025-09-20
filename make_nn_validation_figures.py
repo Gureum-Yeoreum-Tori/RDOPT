@@ -1,493 +1,217 @@
-#%%
-import os
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
-from typing import List, Tuple
-from loader_brg_seal import SealDONModel, SealLeakModel
-import h5py
-from solver_seal import main_seal_solver
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+"""Create validation figures for DeepONet RDC predictions."""
 
-np.random.seed(42)
-# Reuse figure sizes and rcparams from the paper plotting module
-from make_paper_figures import (
-    _default_rcparams,
-    figsize_F,
-    figsize_SC,
-    figsize_DC,
-    figsize_DC_b,
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Dict, Sequence
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from sklearn.preprocessing import StandardScaler
+
+from model_validation.train import (
+    TrainSettings,
+    build_model,
+    compute_metrics,
+    compute_per_head_metrics,
+    inverse_scale_rdc,
+    load_rdc,
 )
 
-device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+DEFAULT_HEAD_LABELS = ("K", "k", "C", "c")
 
 
-m_rdc = SealDONModel(device=device)
-m_leak = SealLeakModel(device=device)
-
-mat_files = ('20250908_T_182846','20250911_T_091324','20250908_T_183632','20250908_T_203220',)
-data_dir = 'dataset/data/tapered_seal'
-
-#%%
-
-# fig, axs = plt.subplots(2, 2, figsize=figsize_F)
-# axs = axs.ravel()
-
-# for seal_idx, mat_file in enumerate(mat_files):
-# # for mat_file in mat_files:
-#     mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
-
-#     # print('current file: '+mat_file)
-    
-#     # 데이터 로딩 및 전처리
-#     with h5py.File(mat_path, 'r') as mat:
-#         input_ = np.array(mat.get('input'))
-#         w_vec = np.array(mat['params/wVec'])
-#         w_min = w_vec[0,0]*30/np.pi
-#         w_max = w_vec[0,-1]*30/np.pi
-#         rdc = np.array(mat.get('RDC'))
-#         rdc = rdc[2:6,:,:] # [C, c, K, k]
-#         leak = np.array(mat.get('Leak'))
-#         leak = leak[6,:].reshape(-1,1)
-
-#         n_para, n_data = input_.shape
-#         _, n_vel = w_vec.shape
-#         n_rdc_coeffs = rdc.shape[0]
-
-#         X_params = input_.T
-#         y_functions = rdc.transpose(2, 0, 1)
-        
-#         w = w_vec.squeeze()
-#         rpm = w*30/np.pi
-
-#     train_idx = m_rdc.models[seal_idx+1]['train_idx']
-#     test_idx = m_rdc.models[seal_idx+1]['test_idx']
-    
-#     X = input_.transpose()
-#     X_train = X[train_idx,:]
-#     X_test = X[test_idx,:]
-#     n_w = w.shape[0]
-    
-#     leak_true = leak
-#     leak_true_train = leak_true[train_idx,:]
-#     leak_true_test = leak_true[test_idx,:]
-#     rdc_true = rdc.transpose([2,0,1])
-#     rdc_true_train = rdc_true[train_idx,:]
-#     rdc_true_test = rdc_true[test_idx,:]
-    
-#     leak_pred_train = m_leak.predict(seal_idx+1, X_train)
-#     leak_pred_test = m_leak.predict(seal_idx+1, X_test)
-#     rdc_pred_train  = m_rdc.predict(seal_idx+1, X_train, w).reshape(X_train.shape[0], 1, 4, n_w).squeeze()
-#     rdc_pred_test  = m_rdc.predict(seal_idx+1, X_test, w).reshape(X_test.shape[0], 1, 4, n_w).squeeze()
-    
-#     plot_idx = np.random.randint(1,10,1)
-#     p_rdc_train_true = rdc_true_train[plot_idx,:,:]
-#     p_rdc_test_true = rdc_true_test[plot_idx,:,:]
-#     p_rdc_train_pred = rdc_pred_train[plot_idx,:,:]
-#     p_rdc_test_pred = rdc_pred_test[plot_idx,:,:]
-        
-#     # plot coefficient of determination (R2) of leakage for research paper
-#     # Compute train/test R^2 for leakage (scalar per sample)
-#     ytr = leak_true_train.ravel().astype(float)
-#     ypr = leak_pred_train.ravel().astype(float)
-#     yte = leak_true_test.ravel().astype(float)
-#     ype = leak_pred_test.ravel().astype(float)
-
-#     y_true = leak_true_train
-#     y_pred = leak_pred_train
-    
-#     y_true = leak_true_test
-#     y_pred = leak_pred_test
-
-#     mn = np.nanmin([y_true, y_pred])
-#     mx = np.nanmax([y_true, y_pred])
-#     # axs[seal_idx].plot([mn, mx], [mn, mx], linestyle='--', linewidth=1, label=r'$y_{\mathrm{pred}}=y_{\mathrm{true}}$')
-#     axs[seal_idx].plot([mn, mx], [mn, mx], linestyle='--', linewidth=0.75, color='k',label=r'$y_{\mathrm{pred}}=y_{\mathrm{true}}$')
-
-#     # 산점도
-#     axs[seal_idx].scatter(y_true[:,-1], y_pred[:,-1], s=8, alpha=0.5, label='Data')
-
-#     # 선형 보정선 y = a x + b (가이드)
-#     a, b = np.polyfit(y_true[:,-1], y_pred[:,-1], 1)
-#     axs[seal_idx].plot([mn, mx], 
-#                     [a*mn + b, a*mx + b], 
-#                     linewidth=1.5, 
-#                     label='fit',
-#                     color="#E88B21")
-
-#     # axs[seal_idx].set_xlabel(r'$y_{\mathrm{true}}$')
-#     # axs[seal_idx].set_ylabel(r'$y_{\mathrm{pred}}$')
-#     axs[seal_idx].set_xlabel(r"Predicted $\dot{m}$")
-#     axs[seal_idx].set_ylabel(r"Real $\dot{m}$")
-#     # axs[seal_idx].set_title('Parity plot (Validation)')
-#     axs[seal_idx].legend(loc='best')
-#     axs[seal_idx].grid(True, linestyle=':', linewidth=0.6)
-    
-    
-#     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-#     mae  = mean_absolute_error(y_true, y_pred)
-#     r2   = r2_score(y_true, y_pred)
-#     yrng = (y_true.max() - y_true.min())
-#     rrmse = rmse / (yrng + 1e-12)
-#     mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
-
-#     # 지표 텍스트(LaTeX)
-#     txt = '\n'.join([
-#         rf'$R^2={r2:.4f}$',
-#         rf'$\mathrm{{RMSE}}={rmse:.3g}$',
-#         rf'$\mathrm{{MAE}}={mae:.3g}$',
-#         rf'$\mathrm{{rRMSE}}={100*rrmse:.2f}\%$',
-#         rf'$\mathrm{{MAPE}}={100*mape:.2f}\%$'
-#     ])
-#     txt = '\n'.join([
-#         rf'$R^2={r2:.4f}$',
-#         rf'$\mathrm{{RMSE}}={rmse:.3g}$',
-#     ])
-#     axs[seal_idx].text(0.05, 0.95, txt, transform=axs[seal_idx].transAxes,
-#             va='top', ha='left', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, linewidth=0.5))
-# fig.tight_layout()
-# fig.savefig('valid_leak.png', dpi=600)
-# fig.show()
-    
-
-#%%
-### 학습 히스토리
-
-# fig, axs = plt.subplots(2, 2, figsize=figsize_F)
-# axs = axs.ravel()
-    
-
-# for seal_idx, mat_file in enumerate(mat_files):
-# # for mat_file in mat_files:
-#     mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
-
-#     # print('current file: '+mat_file)
-    
-#     # 데이터 로딩 및 전처리
-#     with h5py.File(mat_path, 'r') as mat:
-#         input_ = np.array(mat.get('input'))
-#         w_vec = np.array(mat['params/wVec'])
-#         w_min = w_vec[0,0]*30/np.pi
-#         w_max = w_vec[0,-1]*30/np.pi
-#         rdc = np.array(mat.get('RDC'))
-#         rdc = rdc[2:6,:,:] # [C, c, K, k]
-#         leak = np.array(mat.get('Leak'))
-#         leak = leak[6,:].reshape(-1,1)
-
-#         n_para, n_data = input_.shape
-#         _, n_vel = w_vec.shape
-#         n_rdc_coeffs = rdc.shape[0]
-
-#         X_params = input_.T
-#         y_functions = rdc.transpose(2, 0, 1)
-        
-#         w = w_vec.squeeze()
-#         rpm = w*30/np.pi
-
-#     train_idx = m_rdc.models[seal_idx+1]['train_idx']
-#     test_idx = m_rdc.models[seal_idx+1]['test_idx']
-    
-#     X = input_.transpose()
-#     X_train = X[train_idx,:]
-#     X_test = X[test_idx,:]
-#     n_w = w.shape[0]
-    
-#     leak_true = leak
-#     leak_true_train = leak_true[train_idx,:]
-#     leak_true_test = leak_true[test_idx,:]
-#     rdc_true = rdc.transpose([2,0,1])
-#     rdc_true_train = rdc_true[train_idx,:]
-#     rdc_true_test = rdc_true[test_idx,:]
-    
-#     leak_pred_train = m_leak.predict(seal_idx+1, X_train)
-#     leak_pred_test = m_leak.predict(seal_idx+1, X_test)
-#     rdc_pred_train  = m_rdc.predict(seal_idx+1, X_train, w).reshape(X_train.shape[0], 1, 4, n_w).squeeze()
-#     rdc_pred_test  = m_rdc.predict(seal_idx+1, X_test, w).reshape(X_test.shape[0], 1, 4, n_w).squeeze()
-    
-#     plot_idx = np.random.randint(1,10,1)
-#     p_rdc_train_true = rdc_true_train[plot_idx,:,:]
-#     p_rdc_test_true = rdc_true_test[plot_idx,:,:]
-#     p_rdc_train_pred = rdc_pred_train[plot_idx,:,:]
-#     p_rdc_test_pred = rdc_pred_test[plot_idx,:,:]
-        
-#     # plot coefficient of determination (R2) of leakage for research paper
-#     # Compute train/test R^2 for leakage (scalar per sample)
-#     ytr = leak_true_train.ravel().astype(float)
-#     ypr = leak_pred_train.ravel().astype(float)
-#     yte = leak_true_test.ravel().astype(float)
-#     ype = leak_pred_test.ravel().astype(float)
-
-#     y_true = leak_true_train
-#     y_pred = leak_pred_train
-#     y_true = leak_true_test
-#     y_pred = leak_pred_test
-    
-    
-    
-
-#     # axs[seal_idx].set_xlabel(r'$y_{\mathrm{true}}$')
-#     # axs[seal_idx].set_ylabel(r'$y_{\mathrm{pred}}$')
-#     axs[seal_idx].set_xlabel(r"Predicted $\dot{m}$")
-#     axs[seal_idx].set_ylabel(r"Real $\dot{m}$")
-#     # axs[seal_idx].set_title('Parity plot (Validation)')
-#     axs[seal_idx].legend(loc='best')
-#     axs[seal_idx].grid(True, linestyle=':', linewidth=0.6)
-    
-    
-#     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-#     mae  = mean_absolute_error(y_true, y_pred)
-#     r2   = r2_score(y_true, y_pred)
-#     yrng = (y_true.max() - y_true.min())
-#     rrmse = rmse / (yrng + 1e-12)
-#     mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
-
-#     # 지표 텍스트(LaTeX)
-#     txt = '\n'.join([
-#         rf'$R^2={r2:.4f}$',
-#         rf'$\mathrm{{RMSE}}={rmse:.3g}$',
-#         rf'$\mathrm{{MAE}}={mae:.3g}$',
-#         rf'$\mathrm{{rRMSE}}={100*rrmse:.2f}\%$',
-#         rf'$\mathrm{{MAPE}}={100*mape:.2f}\%$'
-#     ])
-#     txt = '\n'.join([
-#         rf'$R^2={r2:.4f}$',
-#         rf'$\mathrm{{RMSE}}={rmse:.3g}$',
-#     ])
-#     axs[seal_idx].text(0.05, 0.95, txt, transform=axs[seal_idx].transAxes,
-#             va='top', ha='left', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, linewidth=0.5))
-# fig.tight_layout()
-# fig.savefig('valid_leak.png', dpi=600)
-# fig.show()
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("checkpoint", type=Path, help="DeepONet checkpoint produced by run_training().")
+    parser.add_argument(
+        "--split",
+        choices=("train", "val", "test"),
+        default="test",
+        help="Dataset split for evaluation.",
+    )
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=4,
+        help="Number of sample cases to plot from the selected split.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("model_validation") / "figures",
+        help="Directory to save generated figures.",
+    )
+    parser.add_argument(
+        "--metrics-json",
+        type=Path,
+        help="Optional metrics JSON path (defaults to output-dir / <stem>_<split>_metrics.json).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for subsampling plot cases.",
+    )
+    return parser.parse_args()
 
 
-# %%
-# 동특성계수 비교
-
-fig, axs = plt.subplots(2, 2, figsize=figsize_F)
-axs = axs.ravel()
-ylabels = ['K $(N/m)$', 'k $(N/m)$','C ($N \cdot s/m$)', 'c ($N \cdot s/m$)']
-for idx in range(4):
-    axs[idx].set_xlabel("Rotating speed (rpm)")
-    axs[idx].set_ylabel(ylabels[idx])
-
-seal_idx = 3
-mat_file = mat_files[seal_idx]
-mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
-
-with h5py.File(mat_path, 'r') as mat:
-    input_ = np.array(mat.get('input'))
-    w_vec = np.array(mat['params/wVec'])
-    w_min = w_vec[0,0]*30/np.pi
-    w_max = w_vec[0,-1]*30/np.pi
-    rdc = np.array(mat.get('RDC'))
-    rdc = rdc[2:6,:,:] # [C, c, K, k]
-    leak = np.array(mat.get('Leak'))
-    leak = leak[6,:].reshape(-1,1)
-
-    n_para, n_data = input_.shape
-    _, n_vel = w_vec.shape
-    n_rdc_coeffs = rdc.shape[0]
-
-    X_params = input_.T
-    y_functions = rdc.transpose(2, 0, 1)
-    
-    w = w_vec.squeeze()
-    rpm = w*30/np.pi
-
-train_idx = m_rdc.models[seal_idx+1]['train_idx']
-test_idx = m_rdc.models[seal_idx+1]['test_idx']
-
-X = input_.transpose()
-X_train = X[train_idx,:]
-X_test = X[test_idx,:]
-n_w = w.shape[0]
-
-leak_true = leak
-leak_true_train = leak_true[train_idx,:]
-leak_true_test = leak_true[test_idx,:]
-rdc_true = rdc.transpose([2,0,1])
-rdc_true_train = rdc_true[train_idx,:]
-rdc_true_test = rdc_true[test_idx,:]
-
-leak_pred_train = m_leak.predict(seal_idx+1, X_train)
-leak_pred_test = m_leak.predict(seal_idx+1, X_test)
-rdc_pred_train  = m_rdc.predict(seal_idx+1, X_train, w).reshape(X_train.shape[0], 1, 4, n_w).squeeze()
-rdc_pred_test  = m_rdc.predict(seal_idx+1, X_test, w).reshape(X_test.shape[0], 1, 4, n_w).squeeze()
-
-# plot_idx = np.random.randint(1,10,1)
-# p_rdc_train_true = rdc_true_train[plot_idx,:,:]
-# p_rdc_train_pred = rdc_pred_train[plot_idx,:,:]
-plot_idx = np.random.randint(0,X_test.shape[0],5)
-plot_idx = [241,  34, 214,  89, 263]
-p_rdc_test_true = rdc_true_test[plot_idx,:,:]
-p_rdc_test_pred = rdc_pred_test[plot_idx,:,:]
-# yte = p_rdc_test_true.ravel().astype(float)
-# ype = p_rdc_test_pred.ravel().astype(float)
-
-y_true = p_rdc_test_true[:,[2,3,0,1],:]
-y_pred = p_rdc_test_pred[:,[2,3,0,1],:]
-rpm = w_vec.squeeze() * 30.0 / np.pi
-colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-
-for i_rdc in range(4):    
-    # y_true_ = y_true[:,i_rdc,:].ravel()
-    # y_pred_ = y_pred[:,i_rdc,:].ravel()
-    # rmse = np.sqrt(mean_squared_error(y_true_, y_pred_))
-    # mae  = mean_absolute_error(y_true_, y_pred_)
-    # r2   = r2_score(y_true_, y_pred_)
-    # yrng = (y_true_.max() - y_true_.min())
-    # rrmse = rmse / (yrng + 1e-12)
-    # mape = np.mean(np.abs((y_true_ - y_pred_) / (np.abs(y_true_) + 1e-12)))
-    
-    y_true_ = rdc_true_test[:,i_rdc,:].ravel()
-    y_pred_ = rdc_pred_test[:,i_rdc,:].ravel()
-    rmse = np.sqrt(mean_squared_error(y_true_, y_pred_))
-    mae  = mean_absolute_error(y_true_, y_pred_)
-    r2   = r2_score(y_true_, y_pred_)
-    
-    n = len(y_true_)
-    num = np.sum(np.square(y_true_ - y_pred_)) / n  # update
-    den = np.sum(np.square(y_pred_))
-    squared_error = num/den
-    rrmse = np.sqrt(squared_error)
-    
-    
-    yrng = (y_true_.max() - y_true_.min())
-    # rrmse = rmse / (yrng + 1e-12)
-    mape = np.mean(np.abs((y_true_ - y_pred_) / (np.abs(y_true_) + 1e-12)))
-    
-    txt = '\n'.join([
-        rf'$R^2={r2:.4f}$',
-        # rf'$\mathrm{{RMSE}}={rmse:.3g}$',
-        # rf'$\mathrm{{MAE}}={mae:.3g}$',
-        rf'$\mathrm{{rRMSE}}={100*rrmse:.2f}\%$',
-        rf'$\mathrm{{MAPE}}={100*mape:.2f}\%$'
-    ])
-    
-    # txt = '\n'.join([
-    #     rf'$R^2={r2:.4f}$',
-    #     rf'$\mathrm{{RMSE}}={rmse:.3g}$',
-    # ])
-    axs[i_rdc].plot(rpm,y_true[:,i_rdc,:].transpose(), 'o',
-                    alpha=0.7, markerfacecolor='none', markersize=4)
-    axs[i_rdc].set_prop_cycle(None)
-    axs[i_rdc].plot(rpm,y_pred[:,i_rdc,:].transpose(), '-', 
-                    linewidth=1)
-    axs[i_rdc].text(0.05, 0.95, txt, transform=axs[i_rdc].transAxes,
-            va='top', ha='left', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, linewidth=0.5), fontsize=8)
-    axs[i_rdc].ticklabel_format(axis='y', style='sci', scilimits=(0,0))
-    axs[i_rdc].grid(True, linestyle=':', linewidth=0.6)
-
-import matplotlib.lines as mlines
-
-# 마커, 선 스타일만 따로 handle 만들기
-true_handle = mlines.Line2D([], [], color='k', marker='o', linestyle='None',
-                            markerfacecolor='none', label='True value', markersize=4)
-pred_handle = mlines.Line2D([], [], color='k', linestyle='-',
-                            label='Predicted')
-
-# figure 아래쪽에 공통 legend 배치
-fig.legend(handles=[true_handle, pred_handle],
-        loc='lower center', ncol=2,
-        bbox_to_anchor=(0.5, -0.06))   
-fig.tight_layout()
-
-fig.savefig('valid_rdc.png', dpi=600, bbox_inches='tight')
-fig.show()
+def restore_scaler(stats: Dict[str, Sequence[float]]) -> StandardScaler:
+    scaler = StandardScaler()
+    mean = np.asarray(stats["mean"], dtype=np.float64).reshape(-1)
+    scale = np.asarray(stats["scale"], dtype=np.float64).reshape(-1)
+    scaler.mean_ = mean
+    scaler.scale_ = scale
+    scaler.var_ = scale ** 2
+    scaler.n_features_in_ = mean.shape[0]
+    scaler.n_samples_seen_ = 1
+    return scaler
 
 
-#%%
+def restore_scalers_list(stats: Dict[str, Sequence[Sequence[float]]]) -> Sequence[StandardScaler]:
+    means = stats.get("mean", [])
+    scales = stats.get("scale", [])
+    if len(means) != len(scales):
+        raise ValueError("Malformed scaler list: mean and scale lengths differ")
+    return [restore_scaler({"mean": m, "scale": s}) for m, s in zip(means, scales)]
 
-# for seal_idx, mat_file in enumerate(mat_files):
-#     mat_path = os.path.join(data_dir, mat_file, 'dataset.mat')
 
-#     # print('current file: '+mat_file)
-    
-#     # 데이터 로딩 및 전처리
-#     with h5py.File(mat_path, 'r') as mat:
-#         input_ = np.array(mat.get('input'))
-#         w_vec = np.array(mat['params/wVec'])
-#         w_min = w_vec[0,0]*30/np.pi
-#         w_max = w_vec[0,-1]*30/np.pi
-#         rdc = np.array(mat.get('RDC'))
-#         rdc = rdc[2:6,:,:] # [C, c, K, k]
-#         leak = np.array(mat.get('Leak'))
-#         leak = leak[6,:].reshape(-1,1)
+def load_checkpoint(path: Path) -> Dict:
+    if not path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+    return torch.load(path, map_location="cpu")
 
-#         n_para, n_data = input_.shape
-#         _, n_vel = w_vec.shape
-#         n_rdc_coeffs = rdc.shape[0]
 
-#         X_params = input_.T
-#         y_functions = rdc.transpose(2, 0, 1)
-        
-#         w = w_vec.squeeze()
-#         rpm = w*30/np.pi
+def batched_forward(
+    model: torch.nn.Module,
+    features: np.ndarray,
+    grid: torch.Tensor,
+    device: torch.device,
+    batch_size: int = 512,
+) -> np.ndarray:
+    outputs: list[np.ndarray] = []
+    for start in range(0, features.shape[0], batch_size):
+        stop = min(start + batch_size, features.shape[0])
+        xb = torch.from_numpy(features[start:stop]).to(device)
+        grid_batch = grid.unsqueeze(0).expand(xb.size(0), -1, -1)
+        with torch.no_grad():
+            preds = model(xb, grid_batch)
+        outputs.append(preds.cpu().numpy())
+    return np.concatenate(outputs, axis=0)
 
-#     train_idx = m_rdc.models[seal_idx+1]['train_idx']
-#     test_idx = m_rdc.models[seal_idx+1]['test_idx']
-    
-#     X = input_.transpose()
-#     X_train = X[train_idx,:]
-#     X_test = X[test_idx,:]
-#     n_w = w.shape[0]
-    
-#     leak_true = leak
-#     leak_true_train = leak_true[train_idx,:]
-#     leak_true_test = leak_true[test_idx,:]
-#     rdc_true = rdc.transpose([2,0,1])
-#     rdc_true_train = rdc_true[train_idx,:]
-#     rdc_true_test = rdc_true[test_idx,:]
-    
-#     leak_pred_train = m_leak.predict(seal_idx+1, X_train)
-#     leak_pred_test = m_leak.predict(seal_idx+1, X_test)
-#     rdc_pred_train  = m_rdc.predict(seal_idx+1, X_train, w).reshape(X_train.shape[0], 1, 4, n_w).squeeze()
-#     rdc_pred_test  = m_rdc.predict(seal_idx+1, X_test, w).reshape(X_test.shape[0], 1, 4, n_w).squeeze()
-    
-#     plot_idx = np.random.randint(1,10,1)
-#     p_rdc_train_true = rdc_true_train[plot_idx,:,:]
-#     p_rdc_test_true = rdc_true_test[plot_idx,:,:]
-#     p_rdc_train_pred = rdc_pred_train[plot_idx,:,:]
-#     p_rdc_test_pred = rdc_pred_test[plot_idx,:,:]
-    
-    
-    
-#     # plot coefficient of determination (R2) of leakage for research paper
-#     # Compute train/test R^2 for leakage (scalar per sample)
-#     ytr = leak_true_train.ravel().astype(float)
-#     ypr = leak_pred_train.ravel().astype(float)
-#     yte = leak_true_test.ravel().astype(float)
-#     ype = leak_pred_test.ravel().astype(float)
 
-#     y_true = leak_true_train
-#     y_pred = leak_pred_train
-#     y_true = leak_true_test
-#     y_pred = leak_pred_test
+def build_rdc_figure(
+    checkpoint_path: Path,
+    checkpoint: Dict,
+    split: str,
+    num_samples: int,
+    output_dir: Path,
+    metrics_path: Path | None,
+    seed: int,
+) -> None:
+    settings = TrainSettings(**checkpoint["settings"])
+    if settings.target != "rdc":
+        raise ValueError("The supplied checkpoint was not trained on RDC data.")
 
-#     # axs[seal_idx].set_xlabel(r'$y_{\mathrm{true}}$')
-#     # axs[seal_idx].set_ylabel(r'$y_{\mathrm{pred}}$')
+    X, Y, grid_norm, grid_raw = load_rdc(settings.data_dir, settings.mat_files, settings.rdc_indices)
+    scaler_X = restore_scaler(checkpoint["scalers"]["X"])
+    scalers_Y = restore_scalers_list(checkpoint["scalers"]["Y"])
 
-    
-    
-#     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-#     mae  = mean_absolute_error(y_true, y_pred)
-#     r2   = r2_score(y_true, y_pred)
-#     yrng = (y_true.max() - y_true.min())
-#     rrmse = rmse / (yrng + 1e-12)
-#     mape = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-12)))
+    X_scaled = scaler_X.transform(X).astype(np.float32)
 
-#     # 지표 텍스트(LaTeX)
-#     txt = '\n'.join([
-#         rf'$R^2={r2:.4f}$',
-#         rf'$\mathrm{{RMSE}}={rmse:.3g}$',
-#         rf'$\mathrm{{MAE}}={mae:.3g}$',
-#         rf'$\mathrm{{rRMSE}}={100*rrmse:.2f}\%$',
-#         rf'$\mathrm{{MAPE}}={100*mape:.2f}\%$'
-#     ])
-#     txt = '\n'.join([
-#         rf'$R^2={r2:.4f}$',
-#         rf'$\mathrm{{RMSE}}={rmse:.3g}$',
-#     ])
-#     axs[seal_idx].text(0.05, 0.95, txt, transform=axs[seal_idx].transAxes,
-#             va='top', ha='left', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, linewidth=0.5))
-# %%
+    splits = {name: np.asarray(idx, dtype=np.int32) for name, idx in checkpoint["splits"].items()}
+    if split not in splits:
+        raise KeyError(f"Split '{split}' not available in checkpoint")
+    split_idx = splits[split]
+    if split_idx.size == 0:
+        raise ValueError(f"Split '{split}' contains no samples")
+
+    device = torch.device("cpu")
+    head_names = tuple(settings.head_names) if settings.head_names else DEFAULT_HEAD_LABELS
+    model = build_model(
+        settings,
+        input_dim=X.shape[1],
+        output_dim=Y.shape[1],
+        head_names=head_names,
+        trunk_input_dim=grid_norm.shape[-1],
+    )
+    model.load_state_dict(checkpoint["state_dict"])
+    model.to(device)
+    model.eval()
+
+    norm_grid = torch.from_numpy(grid_norm.astype(np.float32)).to(device)
+    preds_scaled = batched_forward(model, X_scaled[split_idx], norm_grid, device)
+    preds = inverse_scale_rdc(preds_scaled, scalers_Y)
+    true = Y[split_idx]
+
+    aggregate = compute_metrics(true, preds)
+    per_head = compute_per_head_metrics(true, preds, head_names)
+    metrics = {"aggregate": aggregate, "per_head": per_head}
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    exp_name = settings.exp_name or checkpoint_path.stem
+    if metrics_path is None:
+        metrics_path = output_dir / f"{exp_name}_{split}_metrics.json"
+    metrics_path.write_text(json.dumps(metrics, indent=2))
+
+    rng = np.random.default_rng(seed)
+    sample_count = min(num_samples, split_idx.size)
+    offsets = rng.choice(split_idx.size, size=sample_count, replace=False)
+
+    grid_physical = np.asarray(checkpoint.get("grid", {}).get("original", grid_raw.flatten()), dtype=np.float64)
+    rpm = grid_physical * 30.0 / np.pi
+
+    n_heads = true.shape[1]
+    fig, axes = plt.subplots(
+        sample_count,
+        n_heads,
+        figsize=(n_heads * 3.2, sample_count * 2.4),
+        sharex=True,
+    )
+    if sample_count == 1:
+        axes = np.expand_dims(axes, axis=0)
+
+    line_kwargs = dict(linewidth=1.4)
+    for row, offset in enumerate(offsets):
+        case_id = int(split_idx[offset])
+        for col in range(n_heads):
+            ax = axes[row, col]
+            ax.plot(rpm, true[offset, col], label="Measured", color="#2E86AB", **line_kwargs)
+            ax.plot(rpm, preds[offset, col], label="Predicted", color="#E36F1E", linestyle="--", **line_kwargs)
+            ax.grid(True, linestyle=":", linewidth=0.6)
+            if row == 0:
+                ax.set_title(head_names[col])
+            if col == 0:
+                ax.set_ylabel(f"Sample #{case_id}")
+    for ax in axes[-1, :]:
+        ax.set_xlabel("Rotating speed (rpm)")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2)
+    fig.tight_layout(rect=(0.02, 0.02, 1.0, 0.96))
+
+    figure_path = output_dir / f"{exp_name}_{split}_curves.png"
+    fig.savefig(figure_path, dpi=300)
+
+
+def main() -> None:
+    args = parse_args()
+    checkpoint = load_checkpoint(args.checkpoint)
+    build_rdc_figure(
+        args.checkpoint,
+        checkpoint,
+        args.split,
+        args.num_samples,
+        args.output_dir,
+        args.metrics_json,
+        args.seed,
+    )
+    print(f"Saved figures to {args.output_dir}")
+    if args.metrics_json:
+        print(f"Saved metrics to {args.metrics_json}")
+
+
+if __name__ == "__main__":
+    main()

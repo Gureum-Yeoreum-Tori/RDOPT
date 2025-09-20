@@ -57,6 +57,7 @@ figsize_SC_one_third_ss = (2.4, 1.8) # single column, shorter
 figsize_SC_s = (6, 2.8) # single column, short
 figsize_SC_ss = (6, 2.4) # single column, shorter
 figsize_SC_sss = (6, 2) # single column, shorter
+figsize_SC_ssss = (6, 1.8) # single column, shorter
 figsize_DC = (3.3, 2.06) # double column
 # figsize_DC_b = (3.3, 2.06) # double column, big
 figsize_DC_b = (3.5, 2.18) # double column, big
@@ -448,7 +449,7 @@ def plot_logdec(logdec_arr, w_vec, out_path, ylim=(0.0, 3.0), figsize=figsize_DC
         elif k == 2:
             suffix='rd'
         else:
-            suffix='th'
+            suffix='th' 
         
         if n_w >= 3:
             w_use = np.linspace(w_vec.min(), w_vec.max(), max(200, n_w*5))
@@ -609,7 +610,7 @@ def plot_unbalance_response_rpm(amp, w_vec, ctx, out_path, nodes='key', smooth_s
     ax.set_ylim(0, 80)
     ax.set_xlim(0, rpm.max())
     start, end = ax.get_xlim()
-    ax.xaxis.set_ticks(np.arange(start, end+0.1, 1000))
+    # ax.xaxis.set_ticks(np.arange(start, end+0.1, 1000))
     ax.grid(True, alpha=0.3)
     if show_lgd:
         ax.legend()
@@ -1350,7 +1351,9 @@ for i, case in enumerate(sel):
     
     plot_campbell(eig, w_vec, out_path=f'opt_cb_{i}.png')
     plot_logdec(logdec, w_vec, out_path=f'opt_logdec_{i}.png',figsize=figsize_DC_one_third)
-    plot_unbalance_response_rpm(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_DC, show_lgd=False)
+    # plot_unbalance_response_rpm(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_DC, show_lgd=False)
+    plot_unbalance_response_rpm(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_DC_one_third, show_lgd=False)
+
     
     # _, _, _, _, _, _, _, _, _, _, _, harmonic_oper, _= analyze_design(X, ctx, w_op)
     # plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=harmonic_oper, out_path=f'opt_unb_shaft{i}.png', figsize=figsize_SC_sss, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals,ylim=25)
@@ -1358,9 +1361,15 @@ for i, case in enumerate(sel):
 
 
 #%%
-# plot brg RDC
+
+d = np.load('checkpoints/latest.npz')
+X_pop, F_pop = d['pop_X'], d['pop_F']
+X_pareto, F_pareto = d['opt_X'], d['opt_F']
+sel0 = np.argsort(F_pareto[:, 0])
+sel = sel0[[0,1,4]]
 
 X = np.concatenate((X_init,X_pareto[sel,:]))
+
 
 n_brg = ctx['n_brg']
 n_seal = ctx['n_seal']
@@ -1410,20 +1419,314 @@ C_vals = np.concatenate([C_brg, C_seal], axis=1)
 
 labels = ['ini','1','2','3']
 loc = ['l','r']
-# for i in range(4):
-    
+
+
 #%%
+_, amp0, _, _, _, _, _, _, _, _, _, _, _ = analyze_design(X[0,:].reshape(1,-1), ctx, w_vec)
+_, amp1, _, _, _, _, _, _, _, _, _, _, _ = analyze_design(X[1,:].reshape(1,-1), ctx, w_vec)
+_, amp2, _, _, _, _, _, _, _, _, _, _, _ = analyze_design(X[2,:].reshape(1,-1), ctx, w_vec)
+_, amp3, _, _, _, _, _, _, _, _, _, _, _ = analyze_design(X[3,:].reshape(1,-1), ctx, w_vec)
+
+_, amps, _, _, _, _, _, _, _, _, _, hars, _ = analyze_design(X, ctx, w_vec)
+
+hx = hars[:,:,idx_x].squeeze()*1e6 # pop, n_w, nodes
+hy = hars[:,:,idx_y].squeeze()*1e6 # pop, n_w, nodes
+
+#%%
+brg_nodes = np.array([b.node for b in brgs], dtype=int) 
+
+import matplotlib as mlp
+from cycler import cycler
+default_cycle = mlp.rcParams.get('axes.prop_cycle')    
+colors = default_cycle.by_key().get('color')
+rpm = w_vec*30/np.pi
+
 _default_rcparams()
-fig, axes = plt.subplots(1,2,figsize=figsize_SC_s)
+fig, axes = plt.subplots(1, 2, figsize=figsize_SC_ssss)
+axes = axes.ravel()
+ax = axes[0]
+for ip in range(4):
+    ax.plot(rpm,np.abs(hx[ip,:,brg_nodes[0]].T),'-',color=colors[ip])
+    ax.plot(rpm,np.abs(hy[ip,:,brg_nodes[0]].T),'--',color=colors[ip])
+ax.set_xlim(0,7000)
+ax.set_ylabel(r'Unbalance response ($\mu m$)')
+ax.set_ylim(0,80)
+ax.grid(alpha=0.3)
+ax.set_title('Bearing #1 (Node 2)',fontsize=8)
+
+ax2 = axes[1]
+for ip in range(4):
+    ax2.plot(rpm,np.abs(hx[ip,:,brg_nodes[1]].T),'-',color=colors[ip])
+    ax2.plot(rpm,np.abs(hy[ip,:,brg_nodes[1]].T),'--',color=colors[ip])
+ax2.set_xlim(0,7000)
+ax2.set_ylim(0,80)
+ax2.grid(alpha=0.3)
+ax2.set_ylabel(r'Unbalance response ($\mu m$)')
+ax2.set_title('Bearing #2 (Node 31)',fontsize=8)
+
+ax2.plot([],[],'-',color='k',label='x dir.')
+ax2.plot([],[],'--',color='k',label='y_dir.')
+ax2.legend(loc=1)
+# fig.legend(
+#     handles=[
+#         plt.Line2D([], [], color=colors[i], label=labels[i]) for i in range(4)
+#     ],
+#     loc="lower center",           # 아래쪽 중앙
+#     bbox_to_anchor=(0.5, -0.1),  # x축 아래, 두 서브플롯의 중간
+#     ncol=4,                       # 가로로 4개
+#     frameon=True
+# )
+fig.tight_layout()
+fig.savefig("unb_xy_brg.png",dpi=600,bbox_inches='tight')
+fig.show()
+
+
+
+# fig, ax = plt.subplots(figsize=figsize_SC_ss)
+# for ip in range(4):
+#     ax.plot(rpm,np.abs(hx[ip,:,brg_nodes].T),'-',color=colors[ip])
+#     ax.plot(rpm,np.abs(hy[ip,:,brg_nodes].T),'--',color=colors[ip])
+# ax.plot([],[],'-',color='k',label='x dir.')
+# ax.plot([],[],'--',color='k',label='y_dir.')
+# ax.legend()
+# ax.set_ylabel(r'Unbalance response ($\mu m$)')
+# ax2 = ax.twinx()
+
+# for ip in range(4):
+#     ax2.plot([],[],'-',color=colors[ip],label=labels[ip])
+# ax2.legend()
+# ax2.set_yticklabels([])
+# ax2.set_yticks([])
+# ax2.legend(bbox_to_anchor=(0.5,-0.2), loc='center',
+#         borderaxespad=0., ncol=4, frameon=True)
+# ax2.axis("off")
+
+# fig.tight_layout()
+# fig.savefig("unb_xy_brg2.png",dpi=600,bbox_inches=None)
+# fig.show()
+
+#%%
+K = K_brg.transpose(1,3,0,2) # brg, n_w, pop, rdc
+C = C_brg.transpose(1,3,0,2)
+
+import matplotlib as mlp
+from cycler import cycler
+default_cycle = mlp.rcParams.get('axes.prop_cycle')    
+colors = default_cycle.by_key().get('color')
+rpm = w_vec*30/np.pi
+
+_default_rcparams()
+fig, axes = plt.subplots(1, 2, figsize=figsize_SC_ssss)
+axes = axes.ravel()
+ax = axes[0]
+ib = 0
+for ip in range(4):
+    # ax.plot(rpm,K[ib,:,ip,0],'-',color=colors[ip])
+    ax.plot(rpm,K[ib,:,ip,1],'--',color=colors[ip])
+    if ip in (1,2,3):
+    # if ip == 0:
+    #     # KK = -K[ib,:,ip,2]
+    #     # KK[0] = -K[ib,1,ip,2]*0.8
+    #     # ax.plot(rpm,-K[ib,:,ip,2],':',color=colors[ip])
+    #     # ax.plot(rpm,KK,':',color=colors[ip])
+    #     continue
+    # else:
+        ax.plot(rpm,K[ib,:,ip,2],':',color=colors[ip])
+    # ax.plot(rpm,K[ib,:,ip,2],':',color=colors[ip])
+    # ax.plot(rpm,K[ib,:,ip,3],'-.',color=colors[ip])
+# ax.plot([],[],'-',color='k',label=r'$K_{xx}$')
+ax.plot([],[],'--',color='k',label=r'$K_{xy}$')
+ax.plot([],[],':',color='k',label=r'$K_{yx}$')
+# ax.plot([],[],'-.',color='k',label=r'$K_{yy}$')
+ax.legend()
+ax.set_xlim(0,7000)
+ax.set_ylabel(r'Stiffness ($N/m$)')
+ax.grid(alpha=0.3)
+ax.set_yscale('log')
+ax = axes[1]
+for ip in range(4):
+    ax.plot(rpm,C[ib,:,ip,0],'-',color=colors[ip])
+    # ax.plot(rpm,C[ib,:,ip,1],'--',color=colors[ip])
+    # ax.plot(rpm,C[ib,:,ip,2],':',color=colors[ip])
+    ax.plot(rpm,C[ib,:,ip,3],'-.',color=colors[ip])
+
+ax.plot([],[],'-',color='k',label=r'$C_{xx}$')
+# ax.plot([],[],'--',color='k',label=r'$C_{xy}$')
+# ax.plot([],[],':',color='k',label=r'$C_{yx}$')
+ax.plot([],[],'-.',color='k',label=r'$C_{yy}$')
+ax.legend()
+ax.set_xlim(0,7000)
+ax.set_ylabel(r'Damping ($Ns/m$)')
+ax.grid(alpha=0.3)
+ax.set_yscale('log')
+
+fig.tight_layout()
+fig.savefig("rdc_brg1.png",dpi=600,bbox_inches='tight')
+fig.show()
+
+
+
+
+_default_rcparams()
+fig, axes = plt.subplots(1, 2, figsize=figsize_SC_ssss)
+axes = axes.ravel()
+ax = axes[0]
+ib = 1
+for ip in range(4):
+    # ax.plot(rpm,K[ib,:,ip,0],'-',color=colors[ip])
+    ax.plot(rpm,K[ib,:,ip,1],'--',color=colors[ip])
+    if ip in (1,3):
+        ax.plot(rpm,K[ib,:,ip,2],':',color=colors[ip])
+    # ax.plot(rpm,K[ib,:,ip,2],':',color=colors[ip])
+    # ax.plot(rpm,K[ib,:,ip,3],'-.',color=colors[ip])
+# ax.plot([],[],'-',color='k',label=r'$K_{xx}$')
+ax.plot([],[],'--',color='k',label=r'$K_{xy}$')
+ax.plot([],[],':',color='k',label=r'$K_{yx}$')
+# ax.plot([],[],'-.',color='k',label=r'$K_{yy}$')
+# ax.legend()
+ax.set_xlim(0,7000)
+ax.set_ylabel(r'Stiffness ($N/m$)')
+ax.grid(alpha=0.3)
+ax.set_yscale('log')
+ax = axes[1]
+for ip in range(4):
+    ax.plot(rpm,C[ib,:,ip,0],'-',color=colors[ip])
+    # ax.plot(rpm,C[ib,:,ip,1],'--',color=colors[ip])
+    # ax.plot(rpm,C[ib,:,ip,2],':',color=colors[ip])
+    ax.plot(rpm,C[ib,:,ip,3],'-.',color=colors[ip])
+
+ax.plot([],[],'-',color='k',label=r'$C_{xx}$')
+ax.plot([],[],'--',color='k',label=r'$C_{xy}$')
+ax.plot([],[],':',color='k',label=r'$C_{yx}$')
+ax.plot([],[],'-.',color='k',label=r'$C_{yy}$')
+# ax.legend()
+ax.set_xlim(0,7000)
+ax.set_ylabel(r'Damping ($Ns/m$)')
+ax.grid(alpha=0.3)
+ax.set_yscale('log')
+
+
+fig.legend(
+    handles=[
+        plt.Line2D([], [], color=colors[i], label=labels[i]) for i in range(4)
+    ],
+    loc="lower center",           # 아래쪽 중앙
+    bbox_to_anchor=(0.5, -0.1),  # x축 아래, 두 서브플롯의 중간
+    ncol=4,                       # 가로로 4개
+    frameon=True)
+
+fig.tight_layout()
+fig.savefig("rdc_brg2.png",dpi=600,bbox_inches='tight')
+fig.show()
+
+
+
+
+
+
+#%%
+
+
+ax2 = axes[1]
+for ip in range(4):
+    ax2.plot(rpm,np.abs(hx[ip,:,brg_nodes[1]].T),'-',color=colors[ip])
+    ax2.plot(rpm,np.abs(hy[ip,:,brg_nodes[1]].T),'--',color=colors[ip])
+ax2.set_xlim(0,7000)
+ax2.set_ylim(0,80)
+ax2.grid(alpha=0.3)
+ax2.set_ylabel(r'Unbalance response ($\mu m$)')
+ax2.set_title('Bearing #2 (Node 31)')
+
+ax2.plot([],[],'-',color='k',label='x dir.')
+ax2.plot([],[],'--',color='k',label='y_dir.')
+ax2.legend(loc=1)
+fig.legend(
+    handles=[
+        plt.Line2D([], [], color=colors[i], label=labels[i]) for i in range(4)
+    ],
+    loc="lower center",           # 아래쪽 중앙
+    bbox_to_anchor=(0.5, -0.1),  # x축 아래, 두 서브플롯의 중간
+    ncol=4,                       # 가로로 4개
+    frameon=True
+)
+fig.tight_layout()
+fig.savefig("unb_xy_brg.png",dpi=600,bbox_inches='tight')
+fig.show()
+
+
+
+#%%
+for ip in range(4):
+    fig, ax = plt.subplots(figsize=figsize_F)
+    ax.plot(w_vec,hx[ip,:,brg_nodes],'-')
+    ax.set_prop_cycle(None)
+    ax.plot(w_vec,hy[ip,:,brg_nodes],'--')
+    fig.tight_layout()
+    fig.show()
+
+
+#%%
+K = K_brg.transpose(1,3,0,2) # brg, n_w, pop, rdc
+C = C_brg.transpose(1,3,0,2)
+
+_default_rcparams()
+ylabel = ['Kxx','Kxy','Kyx','Kyy']
+for ib in range(2):
+    fig, axes = plt.subplots(2,2,figsize=(8,6))
+    axes = axes.ravel()
+    for ir, ax in enumerate(axes):
+        ax.plot(w_vec*30/np.pi,K[ib,:,:,ir],label=labels)
+        ax.set_ylabel(ylabel[ir])
+        ax.legend()
+    plt.title(f'Brg_{ib}')
+    fig.tight_layout()
+    fig.savefig(f'K_Brg_{ib}',dpi=600,bbox_inches='tight')
+    fig.show()
+
+
+ylabel = ['Cxx','Cxy','Cyx','Cyy']
+for ib in range(2):
+    fig, axes = plt.subplots(2,2,figsize=(8,6))
+    axes = axes.ravel()
+    for ir, ax in enumerate(axes):
+        ax.plot(w_vec*30/np.pi,C[ib,:,:,ir],label=labels)
+        ax.set_ylabel(ylabel[ir])
+        ax.legend()
+    plt.title(f'Brg_{ib}')
+    fig.tight_layout()
+    fig.savefig(f'C_Brg_{ib}',dpi=600,bbox_inches='tight')
+    fig.show()
+
+#%%
+
 kxy = K_brg[:,:,1,:].transpose(1,2,0)
 kyx = K_brg[:,:,2,:].transpose(1,2,0)
-axes[0].plot(w_vec,kxy[0],'-')
-axes[0].set_prop_cycle(None)
-axes[0].plot(w_vec,kxy[1],'--',linewidth=1.5)
-axes[1].plot(w_vec,kyx[0],'-')
-axes[1].set_prop_cycle(None)
-axes[1].plot(w_vec,kyx[1],'--',linewidth=1.5)
+k = np.concatenate([kxy,kyx],axis=0)
+k = k[[0,2,1,3]]
 
+Cxx = C_brg[:,:,0,:].transpose(1,2,0)
+Cyy = C_brg[:,:,3,:].transpose(1,2,0)
+C = np.concatenate([Cxx,Cyy],axis=0)
+C = C[[0,2,1,3]]
+
+_default_rcparams()
+fig, axes = plt.subplots(2,2,figsize=(8,6))
+axes = axes.ravel()
+ylabel = ['kxy_brg1','kyx_brg1','kxy_brg2','kyx_brg2']
+for i, ax in enumerate(axes):
+    ax.plot(w_vec*30/np.pi,k[i],label=labels)
+    ax.set_ylabel(ylabel[i])
+    ax.legend()
+fig.tight_layout()
+fig.show()
+fig, axes = plt.subplots(2,2,figsize=(8,6))
+axes = axes.ravel()
+ylabel = ['Cxx_brg1','Cyy_brg1','Cxx_brg2','Cyy_brg2']
+for i, ax in enumerate(axes):
+    ax.plot(w_vec*30/np.pi,C[i],label=labels)
+    ax.set_ylabel(ylabel[i])
+    ax.legend()
+fig.tight_layout()
 fig.show()
 
 
