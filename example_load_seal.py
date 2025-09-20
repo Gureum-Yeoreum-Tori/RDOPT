@@ -261,7 +261,8 @@ def main() -> None:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=Path("net/optuna/deeponet/best_trial.pth"),
+        # default=Path("net/optuna/deeponet/best_trial.pth"),
+        default=Path("net/optuna/deeponet/best/best_deeponet_trial032_20250920_081703.pth"),
         help="Path to the saved DeepONet checkpoint.",
     )
     parser.add_argument(
@@ -288,7 +289,7 @@ def main() -> None:
 
     if not args.checkpoint.exists():
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
-
+    print(args.checkpoint)
     show = not args.no_show
     predict_on_test_split(
         checkpoint=args.checkpoint,

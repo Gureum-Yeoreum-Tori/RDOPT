@@ -33,10 +33,10 @@ OPTUNA_SEED = 42
 OUTPUT_DIR = Path("net") / "optuna"
 SUMMARY_PATH = OUTPUT_DIR / "best_trials.json"
 # N_TRIALS: Dict[str, int] = {"mlp": 20, "deeponet": 30}
-N_TRIALS: Dict[str, int] = {"deeponet": 50}
+N_TRIALS: Dict[str, int] = {"deeponet": 30}
 
 # Search spaces
-MLP_WIDTH_CHOICES = [64, 96, 128, 192, 256, 320, 384, 512]
+MLP_WIDTH_CHOICES = [32, 64, 96, 128, 192, 256]
 DEEPONET_BRANCH_CHOICES = [64, 96, 128, 160, 192, 224, 256]
 DEEPONET_TRUNK_CHOICES = [32, 48, 64, 80, 96, 112, 128]
 
@@ -123,8 +123,8 @@ def build_deeponet_settings(trial: Trial) -> TrainSettings:
     settings = create_base_settings("deeponet")
     settings.branch_layers = suggest_layer_stack(trial, "deeponet_branch", 2, 5, DEEPONET_BRANCH_CHOICES)
     settings.trunk_layers = suggest_layer_stack(trial, "deeponet_trunk", 2, 4, DEEPONET_TRUNK_CHOICES)
-    settings.param_embedding_dim = trial.suggest_categorical("deeponet_param_dim", [16, 32, 48, 64, 96, 128, 160])
-    settings.n_basis = trial.suggest_categorical("deeponet_latent_dim", [16, 32, 48, 64, 80, 96, 128])
+    settings.param_embedding_dim = trial.suggest_categorical("deeponet_param_dim", [16, 32, 48, 64, 96, 128])
+    settings.n_basis = trial.suggest_categorical("deeponet_latent_dim", [16, 32, 48, 64, 96, 128])
     # settings.dropout = trial.suggest_float("deeponet_dropout", 0.0, 0.2, step=0.05)
     settings.activation = trial.suggest_categorical("deeponet_activation", ["relu", "gelu"])
     settings.lr = trial.suggest_float("deeponet_lr", 1e-6, 1e-4, log=True)
@@ -192,7 +192,7 @@ def create_study(model_type: str) -> optuna.Study:
 #     SUMMARY_PATH.write_text(json.dumps(summary, indent=2))
 
 
-def save_best_artifact(study: optuna.Study, model_type: str, out_root: Path) -> None:
+def save_best_artifact(study: optuna.Study, model_type: str, mat_file: str, out_root: Path) -> None:
     """study에서 best trial을 골라 체크포인트를 별도 폴더에 복사하고, 메타데이터를 JSON으로 저장."""
     completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
     if not completed:
@@ -221,6 +221,7 @@ def save_best_artifact(study: optuna.Study, model_type: str, out_root: Path) -> 
 
     meta = {
         "model_type": model_type,
+        "mat_file": mat_file,
         "trial_number": best.number,
         "best_value": float(best.value),
         "best_params": best.params,
@@ -276,7 +277,7 @@ def main() -> None:
             print(f"[{model_type}] Best RMSE={best.value:.6f} (trial {best.number})")
 
             # 여기서 바로 best 체크포인트 별도 저장
-            save_best_artifact(study, model_type, OUTPUT_DIR)
+            save_best_artifact(study, model_type, MAT_FILES[0], OUTPUT_DIR)
 
         studies[model_type] = study
 
