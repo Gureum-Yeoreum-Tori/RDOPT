@@ -27,6 +27,7 @@ MAT_FILES = (
     "20250908_T_203220",
 )
 TARGET = "rdc"
+TARGET = "leak"
 
 # Optuna configuration
 OPTUNA_SEED = 42
@@ -34,6 +35,7 @@ OUTPUT_DIR = Path("net") / "optuna"
 SUMMARY_PATH = OUTPUT_DIR / "best_trials.json"
 # N_TRIALS: Dict[str, int] = {"mlp": 20, "deeponet": 30}
 N_TRIALS: Dict[str, int] = {"deeponet": 30}
+N_TRIALS: Dict[str, int] = {"mlp": 30}
 
 # Search spaces
 MLP_WIDTH_CHOICES = [32, 64, 96, 128, 192, 256]
@@ -62,7 +64,7 @@ def create_base_settings(model_type: str) -> TrainSettings:
             lr=1e-4,
             weight_decay=1e-6,
             activation="relu",
-            hidden_layers=[128, 128, 128],
+            hidden_layers=[64, 64, 64],
             dropout=0.0,
             warmup=0,
             patience=150,
@@ -110,7 +112,7 @@ def build_mlp_settings(trial: Trial) -> TrainSettings:
     settings.layernorm = trial.suggest_categorical("mlp_layernorm", [False, True])
     settings.lr = trial.suggest_float("mlp_lr", 1e-5, 5e-3, log=True)
     settings.weight_decay = trial.suggest_float("mlp_weight_decay", 1e-6, 1e-3, log=True)
-    settings.batch_size = trial.suggest_categorical("mlp_batch_size", [256, 512, 1024])
+    # settings.batch_size = trial.suggest_categorical("mlp_batch_size", [256, 512, 1024])
     # settings.grad_clip = trial.suggest_categorical("mlp_grad_clip", [0.0, 0.5, 1.0, 2.0])
     # settings.patience = trial.suggest_int("mlp_patience", 100, 400, step=50)
     settings.epochs = trial.suggest_int("mlp_epochs", 1000, 3000, step=500)

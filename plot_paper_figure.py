@@ -448,7 +448,7 @@ def plot_logdec(logdec_arr, w_vec, out_path, ylim=(0.0, 3.0), figsize=figsize_DC
         elif k == 2:
             suffix='rd'
         else:
-            suffix='st'
+            suffix='th'
         
         if n_w >= 3:
             w_use = np.linspace(w_vec.min(), w_vec.max(), max(200, n_w*5))
@@ -603,9 +603,10 @@ def plot_unbalance_response_rpm(amp, w_vec, ctx, out_path, nodes='key', smooth_s
             ax.plot(rpm, y * 1e6, lw=1.5, label=lbl, **sty,)
     
     ax.set_xlabel('Rotational speed (RPM)')
-    ax.set_ylabel(r'Unbalanced response $(\mu m)$')
+    ax.set_ylabel(r'Unbalance response $(\mu m)$')
     _, ylim_max = ax.get_ylim()
     ax.set_ylim(0, ylim_max)
+    ax.set_ylim(0, 80)
     ax.set_xlim(0, rpm.max())
     start, end = ax.get_xlim()
     ax.xaxis.set_ticks(np.arange(start, end+0.1, 1000))
@@ -1298,7 +1299,7 @@ alpha = 1/2 * np.arctan( 2*(xr*yr+xi*yi) / (xr**2+xi**2-yr**2-yi**2))
 #%%
 plot_campbell(eig_init, w_vec, out_path='ini_campbell.png')
 plot_logdec(logdec_init, w_vec, out_path='ini_logdec.png')
-# plot_unbalance_response_rpm(amp_init, w_vec, ctx, out_path='ini_unb.png', nodes='key', figsize=figsize_SC_sss, show_lgd=True)
+plot_unbalance_response_rpm(amp_init, w_vec, ctx, out_path='ini_unb.png', nodes='key', figsize=figsize_SC_sss, show_lgd=True)
 
 #%%
 
@@ -1349,10 +1350,81 @@ for i, case in enumerate(sel):
     
     plot_campbell(eig, w_vec, out_path=f'opt_cb_{i}.png')
     plot_logdec(logdec, w_vec, out_path=f'opt_logdec_{i}.png',figsize=figsize_DC_one_third)
-    # plot_unbalance_response_rpm(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_DC, show_lgd=False)
+    plot_unbalance_response_rpm(amp, w_vec, ctx, out_path=f'opt_unb_{i}.png', nodes='key', figsize=figsize_DC, show_lgd=False)
     
     # _, _, _, _, _, _, _, _, _, _, _, harmonic_oper, _= analyze_design(X, ctx, w_op)
     # plot_unbalance_response_rated_speed(x_nodes, harmonic_resp=harmonic_oper, out_path=f'opt_unb_shaft{i}.png', figsize=figsize_SC_sss, plot_rotor=True, rotor_elements=rotor_elements,added_elements=added_elements,brgs=brgs,seals=seals,ylim=25)
+
+
+
+#%%
+# plot brg RDC
+
+X = np.concatenate((X_init,X_pareto[sel,:]))
+
+n_brg = ctx['n_brg']
+n_seal = ctx['n_seal']
+model_brg = ctx['model_brg']
+model_seal = ctx['model_seal']
+n_type_seal = ctx['n_type_seal']
+model_seal_leak = ctx['model_seal_leak']
+
+# Parameter scalings
+f_brg_dim = np.array([[1, 1e-4], [1, 1e-4]])
+f_seal_dim = [1e-6, 1e-6, 1e-1]
+rdc_signs = np.array([1, 1, -1, 1])
+
+pop = X.shape[0]
+X_brg = X[:, :n_brg*2].reshape(pop, n_brg, 2)
+X_seal = X[:, n_brg*2:].reshape(pop, n_seal, 3)
+
+# Bearings
+x_brg = X_brg * f_brg_dim
+K_brg, C_brg, loss_brg = model_brg.calculate_brg_rdc_batch(brgs=brgs, params_batch=x_brg, w_vec=w_vec)
+
+# Group seals by type
+groups = {}
+for i, s in enumerate(seals):
+    groups.setdefault(s.SealNet, []).append(i)
+idx_seal = [np.array(groups.get(t+1, []), dtype=int) for t in range(n_type_seal)]
+
+# Seals
+seal_leak = np.zeros((pop, n_seal), dtype=float)
+seal_rdc = np.zeros((pop, n_seal, 4, w_vec.shape[0]), dtype=float)
+for t in range(n_type_seal):
+    idx = idx_seal[t]
+    if idx.size == 0:
+        continue
+    params_t = X_seal[:, idx]
+    x_seal = (params_t.reshape(-1, 3) * f_seal_dim)
+    leak_flat = model_seal_leak.predict(t+1, x_seal).reshape(pop, len(idx))   
+    rdc_flat = model_seal.predict(t+1, x_seal, w_vec).reshape(pop, len(idx), 4, w_vec.shape[0])
+    seal_rdc[:, idx] = rdc_flat
+    seal_leak[:, idx] = leak_flat
+
+K_seal = seal_rdc[:, :, [2, 3, 3, 2], :] * rdc_signs[None, None, :, None]
+C_seal = seal_rdc[:, :, [0, 1, 1, 0], :] * rdc_signs[None, None, :, None]
+
+K_vals = np.concatenate([K_brg, K_seal], axis=1)
+C_vals = np.concatenate([C_brg, C_seal], axis=1)
+
+labels = ['ini','1','2','3']
+loc = ['l','r']
+# for i in range(4):
+    
+#%%
+_default_rcparams()
+fig, axes = plt.subplots(1,2,figsize=figsize_SC_s)
+kxy = K_brg[:,:,1,:].transpose(1,2,0)
+kyx = K_brg[:,:,2,:].transpose(1,2,0)
+axes[0].plot(w_vec,kxy[0],'-')
+axes[0].set_prop_cycle(None)
+axes[0].plot(w_vec,kxy[1],'--',linewidth=1.5)
+axes[1].plot(w_vec,kyx[0],'-')
+axes[1].set_prop_cycle(None)
+axes[1].plot(w_vec,kyx[1],'--',linewidth=1.5)
+
+fig.show()
 
 
 #%%
