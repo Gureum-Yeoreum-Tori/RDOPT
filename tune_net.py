@@ -27,7 +27,7 @@ MAT_FILES = (
     "20250908_T_203220",
 )
 TARGET = "rdc"
-TARGET = "leak"
+# TARGET = "leak"
 
 # Optuna configuration
 OPTUNA_SEED = 42
@@ -35,10 +35,10 @@ OUTPUT_DIR = Path("net") / "optuna"
 SUMMARY_PATH = OUTPUT_DIR / "best_trials.json"
 # N_TRIALS: Dict[str, int] = {"mlp": 20, "deeponet": 30}
 N_TRIALS: Dict[str, int] = {"deeponet": 30}
-N_TRIALS: Dict[str, int] = {"mlp": 30}
+# N_TRIALS: Dict[str, int] = {"mlp": 30}
 
 # Search spaces
-MLP_WIDTH_CHOICES = [32, 64, 96, 128, 192, 256]
+MLP_WIDTH_CHOICES = [32, 64, 128, 192, 256]
 DEEPONET_BRANCH_CHOICES = [64, 96, 128, 160, 192, 224, 256]
 DEEPONET_TRUNK_CHOICES = [32, 48, 64, 80, 96, 112, 128]
 
@@ -67,8 +67,8 @@ def create_base_settings(model_type: str) -> TrainSettings:
             hidden_layers=[64, 64, 64],
             dropout=0.0,
             warmup=0,
-            patience=150,
-            grad_clip=1.0,
+            patience=200,
+            grad_clip=0.0,
             layernorm=False,
             out_dir=str(OUTPUT_DIR / "mlp"),
             **common_kwargs,
@@ -76,7 +76,7 @@ def create_base_settings(model_type: str) -> TrainSettings:
     if model_type == "deeponet":
         return TrainSettings(
             model="deeponet",
-            batch_size=512,
+            batch_size=256,
             epochs=5000,
             lr=1e-4,
             weight_decay=1e-6,
@@ -89,7 +89,7 @@ def create_base_settings(model_type: str) -> TrainSettings:
             n_basis=64,
             warmup=500,
             patience=200,
-            grad_clip=0.5,
+            grad_clip=0.0,
             layernorm=False,
             out_dir=str(OUTPUT_DIR / "deeponet"),
             **common_kwargs,
@@ -105,7 +105,7 @@ def suggest_layer_stack(trial: Trial, prefix: str, min_layers: int, max_layers: 
 
 def build_mlp_settings(trial: Trial) -> TrainSettings:
     settings = create_base_settings("mlp")
-    settings.hidden_layers = suggest_layer_stack(trial, "mlp_hidden", 2, 6, MLP_WIDTH_CHOICES)
+    settings.hidden_layers = suggest_layer_stack(trial, "mlp_hidden", 2, 4, MLP_WIDTH_CHOICES)
     # settings.dropout = trial.suggest_float("mlp_dropout", 0.0, 0.3, step=0.05)
     # settings.activation = trial.suggest_categorical("mlp_activation", ["relu", "gelu", "tanh"])
     settings.activation = trial.suggest_categorical("mlp_activation", ["relu", "gelu"])

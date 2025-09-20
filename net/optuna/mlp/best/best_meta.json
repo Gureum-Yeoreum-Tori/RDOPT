@@ -1,0 +1,43 @@
+{
+  "model_type": "mlp",
+  "mat_file": "20250908_T_203220",
+  "trial_number": 25,
+  "best_value": 0.002424781417739826,
+  "best_params": {
+    "mlp_hidden_n_layers": 3,
+    "mlp_hidden_width_0": 256,
+    "mlp_hidden_width_1": 256,
+    "mlp_hidden_width_2": 64,
+    "mlp_activation": "gelu",
+    "mlp_layernorm": false,
+    "mlp_lr": 0.00010614702959046171,
+    "mlp_weight_decay": 4.4033645350158055e-05,
+    "mlp_epochs": 2500
+  },
+  "user_attrs": {
+    "metrics": {
+      "train": {
+        "rmse": 0.0024337279941174287,
+        "mae": 0.0018615656299516559,
+        "r2": 0.9999998211860657,
+        "rrmse": 9.689904982224107e-05
+      },
+      "val": {
+        "rmse": 0.002424781417739826,
+        "mae": 0.001827108091674745,
+        "r2": 0.9999998211860657,
+        "rrmse": 0.00010440523328725249
+      },
+      "test": {
+        "rmse": 0.0024121874580831527,
+        "mae": 0.0018124246271327138,
+        "r2": 0.9999998211860657,
+        "rrmse": 0.00010431902046548203
+      }
+    },
+    "checkpoint": "net/optuna/mlp/mlp_optuna_trial025.pth",
+    "best_val_loss": 1.8503889502123153e-07
+  },
+  "checkpoint_copied_to": "net/optuna/mlp/best/best_mlp_trial025_20250920_092936.pth",
+  "timestamp": "20250920_092936"
+}
