@@ -558,33 +558,18 @@ def build_model(
         
         if trunk_input_dim is None:
             raise ValueError("DeepONet requires trunk_input_dim")
-        if head_names is not None and output_dim > 1:
-            model_spec = "multihead_deeponet"
-            base = MultiHeadDeepONet(
-                input_dim=input_dim,
-                head_names=head_names,
-                branch_layers=branch_layers,
-                trunk_layers=trunk_layers,
-                param_embd_dim=param_embedding_dim,
-                latent_dim=latent_dim,
-                activation=activation,
-                dropout=dropout,
-                trunk_input_dim=trunk_input_dim,
-            )
-            model = _HeadStacker(base, head_names)
-        else:
-            model_spec = "deeponet"
-            model = DeepONet(
-                input_dim=input_dim,
-                branch_layers=branch_layers,
-                trunk_layers=trunk_layers,
-                param_embd_dim=param_embedding_dim,
-                output_dim=output_dim,
-                latent_dim=latent_dim,
-                activation=activation,
-                dropout=dropout,
-                trunk_input_dim=trunk_input_dim,
-            )
+        model_spec = "deeponet"
+        model = DeepONet(
+            input_dim=input_dim,
+            branch_layers=branch_layers,
+            trunk_layers=trunk_layers,
+            param_embd_dim=param_embedding_dim,
+            output_dim=output_dim,
+            latent_dim=latent_dim,
+            activation=activation,
+            dropout=dropout,
+            trunk_input_dim=trunk_input_dim,
+        )
     else:
         raise ValueError(f"Unknown model type: {settings.model}")
 

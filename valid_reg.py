@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Dict
 
@@ -60,6 +61,16 @@ def load_checkpoint(path: Path) -> Dict:
     return torch.load(path, map_location="cpu")
 
 
+def _format_r2(value: float, decimals: int = 3) -> str:
+    """Floor R^2 to the requested decimal places to avoid showing 1.000."""
+    factor = 10 ** decimals
+    floored = math.floor(value * factor) / factor
+    max_display = 1.0 - 1.0 / factor
+    if floored > max_display:
+        floored = max_display
+    return f"{floored:.{decimals}f}"
+
+
 def build_leak_parity(
     checkpoint: Dict,
     split: str,
@@ -113,11 +124,12 @@ def build_leak_parity(
     ax.set_xlabel("Measured $\\dot{m}$")
     ax.set_ylabel("Predicted $\\dot{m}$")
     ax.set_title(f"Leakage parity ({split})")
+    r2_display = _format_r2(metrics["r2"], decimals=3)
     text = "\n".join(
         [
             f"RMSE: {metrics['rmse']:.4g}",
             f"MAE:  {metrics['mae']:.4g}",
-            f"R^2:  {metrics['r2']:.4f}",
+            f"R^2:  {r2_display}",
             f"rRMSE: {metrics['rrmse']*100:.2f}%",
         ]
     )
