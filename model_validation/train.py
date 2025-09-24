@@ -360,10 +360,11 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     mse = mean_squared_error(true_flat, pred_flat)
     rmse = math.sqrt(mse)
     mae = mean_absolute_error(true_flat, pred_flat)
+    mape = np.mean(np.abs((true_flat - pred_flat) / (np.abs(true_flat) + 1e-12))) * 100.0
     r2 = r2_score(true_flat, pred_flat)
     rng = np.max(true_flat) - np.min(true_flat)
     rrmse = rmse / (rng + 1e-12)
-    return {"rmse": float(rmse), "mae": float(mae), "r2": float(r2), "rrmse": float(rrmse)}
+    return {"rmse": float(rmse), "mae": float(mae), "mape": float(mape), "r2": float(r2), "rrmse": float(rrmse)}
 
 
 def compute_per_head_metrics(
