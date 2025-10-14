@@ -11,7 +11,7 @@ BEST_META_PATHS: Dict[str, Path] = {
     "mlp": Path("net/optuna/brg/mlp/best/best_meta.json"),
     "deeponet": Path("net/optuna/brg/deeponet/best/best_meta.json"),
 }
-
+ 
 DEFAULT_DATA_DIR = Path("dataset/data/fixed")
 DEFAULT_OUT_ROOT = Path("net") / "fixed/tuned_runs"
 DEFAULT_HEAD_NAMES = ("Kxx", "Kxy", "Kyx", "Kyy", "Cxx", "Cxy", "Cyx", "Cyy")
