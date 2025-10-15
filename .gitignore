@@ -4,6 +4,7 @@
 /result
 ng*
 *.png
+*.key
 
 # DS_Store
 .DS_Store
